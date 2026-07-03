@@ -1,0 +1,83 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  /* Tema ERP — dark navy com gradiente e glassmorphism */
+  --bg-gradient: linear-gradient(
+    135deg,
+    #0a1628 0%,
+    #0d2137 25%,
+    #091a10 55%,
+    #061208 75%,
+    #081828 100%
+  );
+  --glass-bg: rgba(255, 255, 255, 0.04);
+  --glass-border: rgba(255, 255, 255, 0.08);
+  --text-primary: #ffffff;
+  --text-secondary: rgba(255, 255, 255, 0.55);
+  --text-muted: rgba(255, 255, 255, 0.28);
+  --accent: #4ade80;
+  --accent-hover: #22c55e;
+
+  /* Variáveis shadcn/ui (base neutral, dark fixo).
+     --accent-ui substitui o --accent do shadcn para não colidir
+     com o --accent do tema acima. */
+  --background: 215 60% 8%;
+  --foreground: 0 0% 98%;
+  --card: 215 50% 10%;
+  --card-foreground: 0 0% 98%;
+  --popover: 215 50% 10%;
+  --popover-foreground: 0 0% 98%;
+  --primary: 142 69% 58%;
+  --primary-foreground: 144 61% 6%;
+  --secondary: 0 0% 100% / 0.06;
+  --secondary-foreground: 0 0% 98%;
+  --muted: 0 0% 100% / 0.06;
+  --muted-foreground: 0 0% 100% / 0.55;
+  --accent-ui: 0 0% 100% / 0.08;
+  --accent-foreground: 0 0% 98%;
+  --destructive: 0 72% 51%;
+  --destructive-foreground: 0 0% 98%;
+  --border: 0 0% 100% / 0.08;
+  --input: 0 0% 100% / 0.1;
+  --ring: 142 69% 58%;
+  --radius: 0.75rem;
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+
+  html {
+    color-scheme: dark;
+  }
+
+  body {
+    @apply text-foreground;
+    margin: 0;
+    min-height: 100svh;
+    background: var(--bg-gradient);
+    background-attachment: fixed;
+    font-family:
+      'Inter',
+      system-ui,
+      -apple-system,
+      'Segoe UI',
+      Roboto,
+      sans-serif;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+}
+
+@layer components {
+  /* Painel glassmorphism padrão do tema */
+  .glass {
+    background: var(--glass-bg);
+    border: 1px solid var(--glass-border);
+    backdrop-filter: blur(16px);
+    -webkit-backdrop-filter: blur(16px);
+  }
+}
