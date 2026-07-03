@@ -49,6 +49,8 @@ export interface Pedido {
   criadoEm?: string | null
   observacoes?: string | null
   itens?: PedidoItem[]
+  /** contagem de itens no objeto de resumo da listagem */
+  totalItens?: number | null
   qtdItens?: number | null
 }
 

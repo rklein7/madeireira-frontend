@@ -5,7 +5,15 @@ import { z } from 'zod'
 import { isAxiosError } from 'axios'
 import { toast } from 'sonner'
 import { useQueryClient } from '@tanstack/react-query'
-import { Loader2, Pencil, Plus, Search, Trash2, Truck } from 'lucide-react'
+import {
+  Loader2,
+  Pencil,
+  Plus,
+  RefreshCw,
+  Search,
+  Trash2,
+  Truck,
+} from 'lucide-react'
 import { Shell } from '@/components/layout/Shell'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -60,6 +68,7 @@ import {
   useCreateFornecedor,
   useFornecedores,
   useInativarFornecedor,
+  useReativarFornecedor,
   useUpdateFornecedor,
   type Fornecedor,
   type FornecedorInput,
@@ -233,6 +242,34 @@ function formParaPayload(values: FornecedorFormValues): FornecedorInput {
 
 const inputDark =
   'h-10 border-white/10 bg-white/5 placeholder:text-[color:var(--text-muted)]'
+
+const filterSelectClass =
+  'h-9 border-transparent bg-white/5 text-sm text-white/75'
+
+function AbaPill({
+  ativo,
+  onClick,
+  children,
+}: {
+  ativo: boolean
+  onClick: () => void
+  children: React.ReactNode
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={cn(
+        'rounded-full px-4 py-2 text-sm font-medium backdrop-blur-[20px] transition-colors',
+        ativo
+          ? 'bg-[rgba(74,222,128,0.18)] text-[#4ade80]'
+          : 'bg-white/[0.04] text-[color:var(--text-secondary)] hover:bg-white/[0.08] hover:text-white',
+      )}
+    >
+      {children}
+    </button>
+  )
+}
 
 function CampoTexto({
   control,
@@ -566,6 +603,9 @@ export default function FornecedoresPage() {
   const [busca, setBusca] = useState('')
   const [buscaDebounced, setBuscaDebounced] = useState('')
   const [page, setPage] = useState(0)
+  const [tipoPessoa, setTipoPessoa] = useState<'PF' | 'PJ' | undefined>()
+  const [aba, setAba] = useState<'ativos' | 'inativos'>('ativos')
+  const inativos = aba === 'inativos'
 
   /* debounce de 400ms na busca */
   useEffect(() => {
@@ -576,8 +616,14 @@ export default function FornecedoresPage() {
     return () => clearTimeout(timer)
   }, [busca])
 
-  const fornecedoresQuery = useFornecedores(buscaDebounced, page)
+  const fornecedoresQuery = useFornecedores(
+    buscaDebounced,
+    tipoPessoa,
+    page,
+    inativos ? false : undefined,
+  )
   const inativarFornecedor = useInativarFornecedor()
+  const reativarFornecedor = useReativarFornecedor()
   const queryClient = useQueryClient()
 
   const [dialog, setDialog] = useState<{
@@ -589,6 +635,8 @@ export default function FornecedoresPage() {
   )
   const [fornecedorParaInativar, setFornecedorParaInativar] =
     useState<Fornecedor | null>(null)
+  const [fornecedorParaReativar, setFornecedorParaReativar] =
+    useState<Fornecedor | null>(null)
 
   const fornecedores = toList(fornecedoresQuery.data)
   const total = totalOf(fornecedoresQuery.data)
@@ -597,6 +645,17 @@ export default function FornecedoresPage() {
   useEffect(() => {
     if (fornecedoresQuery.isError) toast.error('Erro ao carregar fornecedores')
   }, [fornecedoresQuery.isError])
+
+  function trocarAba(nova: 'ativos' | 'inativos') {
+    setAba(nova)
+    setPage(0)
+  }
+
+  function limparFiltros() {
+    setTipoPessoa(undefined)
+    setAba('ativos')
+    setPage(0)
+  }
 
   async function abrirEdicao(fornecedor: Fornecedor) {
     setCarregandoEdicaoId(fornecedor.id)
@@ -628,6 +687,20 @@ export default function FornecedoresPage() {
     }
   }
 
+  async function confirmarReativacao() {
+    if (!fornecedorParaReativar) return
+    try {
+      await reativarFornecedor.mutateAsync(fornecedorParaReativar.id)
+      toast.success('Fornecedor reativado com sucesso')
+    } catch (error) {
+      toast.error(
+        mensagemDaApi(error, 'Não foi possível reativar o fornecedor'),
+      )
+    } finally {
+      setFornecedorParaReativar(null)
+    }
+  }
+
   const listaVazia = !carregando && fornecedores.length === 0
 
   return (
@@ -654,20 +727,83 @@ export default function FornecedoresPage() {
           </Button>
         </div>
 
+        {/* Abas pill + linha de filtros */}
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="flex items-center gap-2">
+            <AbaPill ativo={!inativos} onClick={() => trocarAba('ativos')}>
+              Ativos
+            </AbaPill>
+            <AbaPill ativo={inativos} onClick={() => trocarAba('inativos')}>
+              Inativos
+            </AbaPill>
+          </div>
+
+          <div className="flex items-center gap-2 rounded-xl bg-white/[0.03] px-3 py-2">
+            <Select
+              value={tipoPessoa ?? 'TODOS'}
+              onValueChange={(valor) => {
+                setTipoPessoa(
+                  valor === 'TODOS' ? undefined : (valor as 'PF' | 'PJ'),
+                )
+                setPage(0)
+              }}
+            >
+              <SelectTrigger className={cn(filterSelectClass, 'w-40')}>
+                <SelectValue placeholder="Tipo pessoa" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="TODOS">Todos</SelectItem>
+                <SelectItem value="PF">Pessoa Física</SelectItem>
+                <SelectItem value="PJ">Pessoa Jurídica</SelectItem>
+              </SelectContent>
+            </Select>
+
+            <Select
+              value={inativos ? 'INATIVOS' : 'ATIVOS'}
+              onValueChange={(valor) =>
+                trocarAba(valor === 'INATIVOS' ? 'inativos' : 'ativos')
+              }
+            >
+              <SelectTrigger className={cn(filterSelectClass, 'w-36')}>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="ATIVOS">Ativos</SelectItem>
+                <SelectItem value="INATIVOS">Inativos</SelectItem>
+              </SelectContent>
+            </Select>
+
+            {tipoPessoa !== undefined && (
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={limparFiltros}
+                className="h-9 text-[color:var(--text-secondary)] hover:bg-white/[0.06] hover:text-white"
+              >
+                Limpar
+              </Button>
+            )}
+          </div>
+        </div>
+
         {/* Tabela / estado vazio */}
         {listaVazia ? (
           <div className="flex flex-col items-center justify-center gap-3 rounded-[20px] bg-white/[0.04] py-16 backdrop-blur-[20px]">
             <Truck className="h-16 w-16 text-white/15" strokeWidth={1.2} />
             <p className="text-sm text-[color:var(--text-secondary)]">
-              Nenhum fornecedor encontrado
+              {inativos
+                ? 'Nenhum fornecedor inativo'
+                : 'Nenhum fornecedor encontrado'}
             </p>
-            <Button
-              onClick={() => setDialog({ aberto: true, fornecedor: null })}
-              className="mt-1 bg-[#4ade80] font-semibold text-[#04140a] hover:bg-[color:var(--accent-hover)]"
-            >
-              <Plus className="mr-1.5 h-4 w-4" />
-              Cadastrar primeiro fornecedor
-            </Button>
+            {!inativos && (
+              <Button
+                onClick={() => setDialog({ aberto: true, fornecedor: null })}
+                className="mt-1 bg-[#4ade80] font-semibold text-[#04140a] hover:bg-[color:var(--accent-hover)]"
+              >
+                <Plus className="mr-1.5 h-4 w-4" />
+                Cadastrar primeiro fornecedor
+              </Button>
+            )}
           </div>
         ) : (
           <div className="rounded-[20px] bg-white/[0.04] backdrop-blur-[20px]">
@@ -742,12 +878,12 @@ export default function FornecedoresPage() {
                         <Badge
                           className={cn(
                             'rounded-full border-transparent font-medium',
-                            fornecedor.ativo !== false
-                              ? 'bg-[rgba(74,222,128,0.15)] text-[#4ade80] hover:bg-[rgba(74,222,128,0.15)]'
-                              : 'bg-red-500/15 text-red-400 hover:bg-red-500/15',
+                            inativos
+                              ? 'bg-red-500/15 text-red-400 hover:bg-red-500/15'
+                              : 'bg-[rgba(74,222,128,0.15)] text-[#4ade80] hover:bg-[rgba(74,222,128,0.15)]',
                           )}
                         >
-                          {fornecedor.ativo !== false ? 'Ativo' : 'Inativo'}
+                          {inativos ? 'Inativo' : 'Ativo'}
                         </Badge>
                       </TableCell>
                       <TableCell>
@@ -765,14 +901,29 @@ export default function FornecedoresPage() {
                               <Pencil className="h-4 w-4" />
                             )}
                           </button>
-                          <button
-                            type="button"
-                            title="Inativar"
-                            onClick={() => setFornecedorParaInativar(fornecedor)}
-                            className="flex h-8 w-8 items-center justify-center rounded-lg text-[color:var(--text-secondary)] transition-colors hover:bg-red-500/15 hover:text-red-400"
-                          >
-                            <Trash2 className="h-4 w-4" />
-                          </button>
+                          {inativos ? (
+                            <button
+                              type="button"
+                              title="Reativar"
+                              onClick={() =>
+                                setFornecedorParaReativar(fornecedor)
+                              }
+                              className="flex h-8 w-8 items-center justify-center rounded-lg text-[color:var(--text-secondary)] transition-colors hover:bg-[rgba(74,222,128,0.15)] hover:text-[#4ade80]"
+                            >
+                              <RefreshCw className="h-4 w-4" />
+                            </button>
+                          ) : (
+                            <button
+                              type="button"
+                              title="Inativar"
+                              onClick={() =>
+                                setFornecedorParaInativar(fornecedor)
+                              }
+                              className="flex h-8 w-8 items-center justify-center rounded-lg text-[color:var(--text-secondary)] transition-colors hover:bg-red-500/15 hover:text-red-400"
+                            >
+                              <Trash2 className="h-4 w-4" />
+                            </button>
+                          )}
                         </div>
                       </TableCell>
                     </TableRow>
@@ -854,6 +1005,44 @@ export default function FornecedoresPage() {
                 <Loader2 className="mr-2 h-4 w-4 animate-spin" />
               )}
               Inativar
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/* Confirmação de reativação */}
+      <AlertDialog
+        open={fornecedorParaReativar != null}
+        onOpenChange={(aberto) => !aberto && setFornecedorParaReativar(null)}
+      >
+        <AlertDialogContent className="border-white/10">
+          <AlertDialogHeader>
+            <AlertDialogTitle>Reativar fornecedor</AlertDialogTitle>
+            <AlertDialogDescription>
+              Deseja reativar{' '}
+              <span className="font-semibold text-white">
+                {fornecedorParaReativar?.razaoSocial}
+              </span>
+              ? O fornecedor voltará a aparecer nas buscas e poderá ser vinculado
+              em novas notas fiscais.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={reativarFornecedor.isPending}>
+              Cancelar
+            </AlertDialogCancel>
+            <AlertDialogAction
+              onClick={(event) => {
+                event.preventDefault()
+                confirmarReativacao()
+              }}
+              disabled={reativarFornecedor.isPending}
+              className="bg-[#4ade80] font-semibold text-[#04140a] hover:bg-[color:var(--accent-hover)]"
+            >
+              {reativarFornecedor.isPending && (
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+              )}
+              Reativar
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

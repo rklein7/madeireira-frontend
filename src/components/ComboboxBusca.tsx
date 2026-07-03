@@ -90,17 +90,17 @@ export function ComboboxBusca<T>({
 }
 
 function useBuscaClientes(busca: string) {
-  const query = useClientes(busca, 0)
+  const query = useClientes(busca, undefined, 0)
   return { itens: toList(query.data), carregando: query.isLoading }
 }
 
 function useBuscaProdutos(busca: string) {
-  const query = useProdutos(busca, 0)
+  const query = useProdutos(busca, undefined, undefined, 0)
   return { itens: toList(query.data), carregando: query.isLoading }
 }
 
 function useBuscaFornecedores(busca: string) {
-  const query = useFornecedores(busca, 0)
+  const query = useFornecedores(busca, undefined, 0)
   return { itens: toList(query.data), carregando: query.isLoading }
 }
 

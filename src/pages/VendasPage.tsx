@@ -649,7 +649,8 @@ function AbaPedidos({
                   ))}
 
                 {pedidos.map((pedido) => {
-                  const qtdItens = pedido.itens?.length ?? pedido.qtdItens ?? 0
+                  const qtdItens =
+                    pedido.totalItens ?? pedido.itens?.length ?? pedido.qtdItens ?? 0
                   return (
                     <TableRow
                       key={pedido.id}

@@ -12,6 +12,7 @@ import {
   Package,
   Pencil,
   Plus,
+  RefreshCw,
   Search,
   Trash2,
 } from 'lucide-react'
@@ -71,9 +72,12 @@ import {
   useCreateProduto,
   useInativarProduto,
   useProdutos,
+  useReativarProduto,
   useUpdateProduto,
+  type Categoria,
   type Produto,
   type ProdutoInput,
+  type UnidadeMedida,
 } from '@/hooks/useProdutos'
 import { cn } from '@/lib/utils'
 
@@ -222,6 +226,34 @@ function formParaPayload(values: ProdutoFormValues): ProdutoInput {
 const inputDark =
   'h-10 border-white/10 bg-white/5 placeholder:text-[color:var(--text-muted)]'
 
+const filterSelectClass =
+  'h-9 border-transparent bg-white/5 text-sm text-white/75'
+
+function AbaPill({
+  ativo,
+  onClick,
+  children,
+}: {
+  ativo: boolean
+  onClick: () => void
+  children: React.ReactNode
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={cn(
+        'rounded-full px-4 py-2 text-sm font-medium backdrop-blur-[20px] transition-colors',
+        ativo
+          ? 'bg-[rgba(74,222,128,0.18)] text-[#4ade80]'
+          : 'bg-white/[0.04] text-[color:var(--text-secondary)] hover:bg-white/[0.08] hover:text-white',
+      )}
+    >
+      {children}
+    </button>
+  )
+}
+
 function CampoTexto({
   control,
   name,
@@ -291,15 +323,16 @@ function SecaoLabel({ children }: { children: React.ReactNode }) {
 
 function ProdutoDialog({
   produto,
+  categorias,
   onClose,
 }: {
   produto: Produto | null
+  categorias: Categoria[]
   onClose: () => void
 }) {
   const editando = produto != null
   const createProduto = useCreateProduto()
   const updateProduto = useUpdateProduto()
-  const categorias = useCategorias()
   const salvando = createProduto.isPending || updateProduto.isPending
   const [dimensoesAbertas, setDimensoesAbertas] = useState(false)
 
@@ -378,7 +411,7 @@ function ProdutoDialog({
                         </SelectTrigger>
                       </FormControl>
                       <SelectContent className="max-h-64">
-                        {toList(categorias.data).map((categoria) => (
+                        {categorias.map((categoria) => (
                           <SelectItem key={categoria.id} value={categoria.id}>
                             {categoria.nome}
                           </SelectItem>
@@ -554,6 +587,10 @@ export default function ProdutosPage() {
   const [busca, setBusca] = useState('')
   const [buscaDebounced, setBuscaDebounced] = useState('')
   const [page, setPage] = useState(0)
+  const [unidadeMedida, setUnidadeMedida] = useState<UnidadeMedida | undefined>()
+  const [ordemEstoque, setOrdemEstoque] = useState<'asc' | 'desc' | undefined>()
+  const [aba, setAba] = useState<'ativos' | 'inativos'>('ativos')
+  const inativos = aba === 'inativos'
 
   /* debounce de 400ms na busca */
   useEffect(() => {
@@ -564,9 +601,19 @@ export default function ProdutosPage() {
     return () => clearTimeout(timer)
   }, [busca])
 
-  const produtosQuery = useProdutos(buscaDebounced, page)
+  const produtosQuery = useProdutos(
+    buscaDebounced,
+    unidadeMedida,
+    ordemEstoque,
+    page,
+    inativos ? false : undefined,
+  )
   const alertasQuery = useAlertasEstoque()
+  /* no nível raiz da página: carrega antes do modal abrir e
+     usa a instância api.ts (Bearer token injetado) */
+  const categoriasQuery = useCategorias()
   const inativarProduto = useInativarProduto()
+  const reativarProduto = useReativarProduto()
   const queryClient = useQueryClient()
 
   const [dialog, setDialog] = useState<{
@@ -578,6 +625,8 @@ export default function ProdutosPage() {
   )
   const [produtoParaInativar, setProdutoParaInativar] =
     useState<Produto | null>(null)
+  const [produtoParaReativar, setProdutoParaReativar] =
+    useState<Produto | null>(null)
 
   const produtos = toList(produtosQuery.data)
   const total = totalOf(produtosQuery.data)
@@ -587,6 +636,20 @@ export default function ProdutosPage() {
   useEffect(() => {
     if (produtosQuery.isError) toast.error('Erro ao carregar produtos')
   }, [produtosQuery.isError])
+
+  function trocarAba(nova: 'ativos' | 'inativos') {
+    setAba(nova)
+    setPage(0)
+  }
+
+  const temFiltro = unidadeMedida !== undefined || ordemEstoque !== undefined
+
+  function limparFiltros() {
+    setUnidadeMedida(undefined)
+    setOrdemEstoque(undefined)
+    setAba('ativos')
+    setPage(0)
+  }
 
   async function abrirEdicao(produto: Produto) {
     setCarregandoEdicaoId(produto.id)
@@ -609,6 +672,18 @@ export default function ProdutosPage() {
       toast.error(mensagemDaApi(error, 'Não foi possível inativar o produto'))
     } finally {
       setProdutoParaInativar(null)
+    }
+  }
+
+  async function confirmarReativacao() {
+    if (!produtoParaReativar) return
+    try {
+      await reativarProduto.mutateAsync(produtoParaReativar.id)
+      toast.success('Produto reativado com sucesso')
+    } catch (error) {
+      toast.error(mensagemDaApi(error, 'Não foi possível reativar o produto'))
+    } finally {
+      setProdutoParaReativar(null)
     }
   }
 
@@ -638,6 +713,87 @@ export default function ProdutosPage() {
           </Button>
         </div>
 
+        {/* Abas pill + linha de filtros */}
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="flex items-center gap-2">
+            <AbaPill ativo={!inativos} onClick={() => trocarAba('ativos')}>
+              Ativos
+            </AbaPill>
+            <AbaPill ativo={inativos} onClick={() => trocarAba('inativos')}>
+              Inativos
+            </AbaPill>
+          </div>
+
+          <div className="flex items-center gap-2 rounded-xl bg-white/[0.03] px-3 py-2">
+            <Select
+              value={unidadeMedida ?? 'TODAS'}
+              onValueChange={(valor) => {
+                setUnidadeMedida(
+                  valor === 'TODAS' ? undefined : (valor as UnidadeMedida),
+                )
+                setPage(0)
+              }}
+            >
+              <SelectTrigger className={cn(filterSelectClass, 'w-36')}>
+                <SelectValue placeholder="Unidade" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="TODAS">Todas</SelectItem>
+                {UNIDADES.map((unidade) => (
+                  <SelectItem key={unidade.value} value={unidade.value}>
+                    {unidade.label} ({unidade.value})
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+
+            <Select
+              value={ordemEstoque ?? 'PADRAO'}
+              onValueChange={(valor) => {
+                setOrdemEstoque(
+                  valor === 'PADRAO' ? undefined : (valor as 'asc' | 'desc'),
+                )
+                setPage(0)
+              }}
+            >
+              <SelectTrigger className={cn(filterSelectClass, 'w-40')}>
+                <SelectValue placeholder="Estoque" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="PADRAO">Padrão</SelectItem>
+                <SelectItem value="asc">Menor primeiro</SelectItem>
+                <SelectItem value="desc">Maior primeiro</SelectItem>
+              </SelectContent>
+            </Select>
+
+            <Select
+              value={inativos ? 'INATIVOS' : 'ATIVOS'}
+              onValueChange={(valor) =>
+                trocarAba(valor === 'INATIVOS' ? 'inativos' : 'ativos')
+              }
+            >
+              <SelectTrigger className={cn(filterSelectClass, 'w-36')}>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="ATIVOS">Ativos</SelectItem>
+                <SelectItem value="INATIVOS">Inativos</SelectItem>
+              </SelectContent>
+            </Select>
+
+            {temFiltro && (
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={limparFiltros}
+                className="h-9 text-[color:var(--text-secondary)] hover:bg-white/[0.06] hover:text-white"
+              >
+                Limpar
+              </Button>
+            )}
+          </div>
+        </div>
+
         {/* Banner de alerta de estoque mínimo */}
         {alertas.length > 0 && (
           <div className="flex items-center gap-3 rounded-[20px] border border-[rgba(251,191,36,0.3)] bg-amber-500/10 px-5 py-3 backdrop-blur-[20px]">
@@ -661,15 +817,17 @@ export default function ProdutosPage() {
           <div className="flex flex-col items-center justify-center gap-3 rounded-[20px] bg-white/[0.04] py-16 backdrop-blur-[20px]">
             <Package className="h-16 w-16 text-white/15" strokeWidth={1.2} />
             <p className="text-sm text-[color:var(--text-secondary)]">
-              Nenhum produto encontrado
+              {inativos ? 'Nenhum produto inativo' : 'Nenhum produto encontrado'}
             </p>
-            <Button
-              onClick={() => setDialog({ aberto: true, produto: null })}
-              className="mt-1 bg-[#4ade80] font-semibold text-[#04140a] hover:bg-[color:var(--accent-hover)]"
-            >
-              <Plus className="mr-1.5 h-4 w-4" />
-              Cadastrar primeiro produto
-            </Button>
+            {!inativos && (
+              <Button
+                onClick={() => setDialog({ aberto: true, produto: null })}
+                className="mt-1 bg-[#4ade80] font-semibold text-[#04140a] hover:bg-[color:var(--accent-hover)]"
+              >
+                <Plus className="mr-1.5 h-4 w-4" />
+                Cadastrar primeiro produto
+              </Button>
+            )}
           </div>
         ) : (
           <div className="rounded-[20px] bg-white/[0.04] backdrop-blur-[20px]">
@@ -756,12 +914,12 @@ export default function ProdutosPage() {
                           <Badge
                             className={cn(
                               'rounded-full border-transparent font-medium',
-                              produto.ativo !== false
-                                ? 'bg-[rgba(74,222,128,0.15)] text-[#4ade80] hover:bg-[rgba(74,222,128,0.15)]'
-                                : 'bg-red-500/15 text-red-400 hover:bg-red-500/15',
+                              inativos
+                                ? 'bg-red-500/15 text-red-400 hover:bg-red-500/15'
+                                : 'bg-[rgba(74,222,128,0.15)] text-[#4ade80] hover:bg-[rgba(74,222,128,0.15)]',
                             )}
                           >
-                            {produto.ativo !== false ? 'Ativo' : 'Inativo'}
+                            {inativos ? 'Inativo' : 'Ativo'}
                           </Badge>
                         </TableCell>
                         <TableCell>
@@ -779,14 +937,25 @@ export default function ProdutosPage() {
                                 <Pencil className="h-4 w-4" />
                               )}
                             </button>
-                            <button
-                              type="button"
-                              title="Inativar"
-                              onClick={() => setProdutoParaInativar(produto)}
-                              className="flex h-8 w-8 items-center justify-center rounded-lg text-[color:var(--text-secondary)] transition-colors hover:bg-red-500/15 hover:text-red-400"
-                            >
-                              <Trash2 className="h-4 w-4" />
-                            </button>
+                            {inativos ? (
+                              <button
+                                type="button"
+                                title="Reativar"
+                                onClick={() => setProdutoParaReativar(produto)}
+                                className="flex h-8 w-8 items-center justify-center rounded-lg text-[color:var(--text-secondary)] transition-colors hover:bg-[rgba(74,222,128,0.15)] hover:text-[#4ade80]"
+                              >
+                                <RefreshCw className="h-4 w-4" />
+                              </button>
+                            ) : (
+                              <button
+                                type="button"
+                                title="Inativar"
+                                onClick={() => setProdutoParaInativar(produto)}
+                                className="flex h-8 w-8 items-center justify-center rounded-lg text-[color:var(--text-secondary)] transition-colors hover:bg-red-500/15 hover:text-red-400"
+                              >
+                                <Trash2 className="h-4 w-4" />
+                              </button>
+                            )}
                           </div>
                         </TableCell>
                       </TableRow>
@@ -833,6 +1002,7 @@ export default function ProdutosPage() {
         <ProdutoDialog
           key={dialog.produto?.id ?? 'novo'}
           produto={dialog.produto}
+          categorias={toList(categoriasQuery.data)}
           onClose={() => setDialog({ aberto: false, produto: null })}
         />
       )}
@@ -869,6 +1039,44 @@ export default function ProdutosPage() {
                 <Loader2 className="mr-2 h-4 w-4 animate-spin" />
               )}
               Inativar
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/* Confirmação de reativação */}
+      <AlertDialog
+        open={produtoParaReativar != null}
+        onOpenChange={(aberto) => !aberto && setProdutoParaReativar(null)}
+      >
+        <AlertDialogContent className="border-white/10">
+          <AlertDialogHeader>
+            <AlertDialogTitle>Reativar produto</AlertDialogTitle>
+            <AlertDialogDescription>
+              Deseja reativar{' '}
+              <span className="font-semibold text-white">
+                {produtoParaReativar?.descricao}
+              </span>
+              ? O produto voltará a aparecer no estoque e poderá ser adicionado
+              em novos pedidos.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={reativarProduto.isPending}>
+              Cancelar
+            </AlertDialogCancel>
+            <AlertDialogAction
+              onClick={(event) => {
+                event.preventDefault()
+                confirmarReativacao()
+              }}
+              disabled={reativarProduto.isPending}
+              className="bg-[#4ade80] font-semibold text-[#04140a] hover:bg-[color:var(--accent-hover)]"
+            >
+              {reativarProduto.isPending && (
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+              )}
+              Reativar
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

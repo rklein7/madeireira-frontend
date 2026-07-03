@@ -43,13 +43,30 @@ export type ProdutoInput = Omit<
 
 export const PAGE_SIZE = 20
 
-export function useProdutos(busca: string, page: number) {
+export type UnidadeMedida = 'M2' | 'M3' | 'KG' | 'PECA' | 'ML' | 'ROLO'
+
+export function useProdutos(
+  busca: string,
+  unidadeMedida: UnidadeMedida | undefined,
+  ordemEstoque: 'asc' | 'desc' | undefined,
+  page: number,
+  ativo?: boolean,
+) {
   return useQuery({
-    queryKey: ['produtos', { busca, page }],
+    queryKey: ['produtos', { busca, unidadeMedida, ordemEstoque, page, ativo }],
     queryFn: async () => {
       const { data } = await api.get<SpringPage<Produto> | Produto[]>(
         '/produtos',
-        { params: { busca, page, size: PAGE_SIZE } },
+        {
+          params: {
+            busca,
+            unidadeMedida,
+            sort: ordemEstoque ? `estoqueAtual,${ordemEstoque}` : undefined,
+            ativo,
+            page,
+            size: PAGE_SIZE,
+          },
+        },
       )
       return data
     },
@@ -132,6 +149,23 @@ export function useInativarProduto() {
   return useMutation({
     mutationFn: async (id: string) => {
       await api.delete(`/produtos/${id}`)
+    },
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['produtos'] }),
+  })
+}
+
+/** Reativa buscando o objeto completo e reenviando com ativo: true
+    (o backend espera o PUT com todos os campos). */
+export function useReativarProduto() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: async (id: string) => {
+      const { data: atual } = await api.get<Produto>(`/produtos/${id}`)
+      const { data } = await api.put<Produto>(`/produtos/${id}`, {
+        ...atual,
+        ativo: true,
+      })
+      return data
     },
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['produtos'] }),
   })

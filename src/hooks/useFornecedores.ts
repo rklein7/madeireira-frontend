@@ -34,13 +34,18 @@ export type FornecedorInput = Omit<Fornecedor, 'id' | 'ativo'>
 
 export const PAGE_SIZE = 20
 
-export function useFornecedores(busca: string, page: number) {
+export function useFornecedores(
+  busca: string,
+  tipoPessoa: 'PF' | 'PJ' | undefined,
+  page: number,
+  ativo?: boolean,
+) {
   return useQuery({
-    queryKey: ['fornecedores', { busca, page }],
+    queryKey: ['fornecedores', { busca, tipoPessoa, page, ativo }],
     queryFn: async () => {
       const { data } = await api.get<SpringPage<Fornecedor> | Fornecedor[]>(
         '/fornecedores',
-        { params: { busca, page, size: PAGE_SIZE } },
+        { params: { busca, tipoPessoa, ativo, page, size: PAGE_SIZE } },
       )
       return data
     },
@@ -106,6 +111,24 @@ export function useInativarFornecedor() {
   return useMutation({
     mutationFn: async (id: string) => {
       await api.delete(`/fornecedores/${id}`)
+    },
+    onSuccess: () =>
+      queryClient.invalidateQueries({ queryKey: ['fornecedores'] }),
+  })
+}
+
+/** Reativa buscando o objeto completo e reenviando com ativo: true
+    (o backend espera o PUT com todos os campos). */
+export function useReativarFornecedor() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: async (id: string) => {
+      const { data: atual } = await api.get<Fornecedor>(`/fornecedores/${id}`)
+      const { data } = await api.put<Fornecedor>(`/fornecedores/${id}`, {
+        ...atual,
+        ativo: true,
+      })
+      return data
     },
     onSuccess: () =>
       queryClient.invalidateQueries({ queryKey: ['fornecedores'] }),

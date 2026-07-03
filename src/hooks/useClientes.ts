@@ -34,13 +34,18 @@ export type ClienteInput = Omit<Cliente, 'id' | 'ativo'>
 
 export const PAGE_SIZE = 20
 
-export function useClientes(busca: string, page: number) {
+export function useClientes(
+  busca: string,
+  tipoPessoa: 'PF' | 'PJ' | undefined,
+  page: number,
+  ativo?: boolean,
+) {
   return useQuery({
-    queryKey: ['clientes', { busca, page }],
+    queryKey: ['clientes', { busca, tipoPessoa, page, ativo }],
     queryFn: async () => {
       const { data } = await api.get<SpringPage<Cliente> | Cliente[]>(
         '/clientes',
-        { params: { busca, page, size: PAGE_SIZE } },
+        { params: { busca, tipoPessoa, ativo, page, size: PAGE_SIZE } },
       )
       return data
     },
@@ -98,6 +103,23 @@ export function useInativarCliente() {
   return useMutation({
     mutationFn: async (id: string) => {
       await api.delete(`/clientes/${id}`)
+    },
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['clientes'] }),
+  })
+}
+
+/** Reativa buscando o objeto completo e reenviando com ativo: true
+    (o backend espera o PUT com todos os campos). */
+export function useReativarCliente() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: async (id: string) => {
+      const { data: atual } = await api.get<Cliente>(`/clientes/${id}`)
+      const { data } = await api.put<Cliente>(`/clientes/${id}`, {
+        ...atual,
+        ativo: true,
+      })
+      return data
     },
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['clientes'] }),
   })

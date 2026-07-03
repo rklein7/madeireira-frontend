@@ -217,7 +217,7 @@ function ProdutoCombobox({
     return () => clearTimeout(timer)
   }, [texto])
 
-  const produtosQuery = useProdutos(textoDebounced, 0)
+  const produtosQuery = useProdutos(textoDebounced, undefined, undefined, 0)
   const produtos = toList(produtosQuery.data)
 
   return (
@@ -303,7 +303,7 @@ function MovimentoDialog({
 }) {
   const [produto, setProduto] = useState<Produto | null>(produtoInicial)
   const registrar = useRegistrarMovimento()
-  const fornecedoresQuery = useFornecedores('', 0)
+  const fornecedoresQuery = useFornecedores('', undefined, 0)
   const saldoQuery = useSaldoProduto(produto?.id ?? null)
 
   const form = useForm<MovimentoFormValues>({
