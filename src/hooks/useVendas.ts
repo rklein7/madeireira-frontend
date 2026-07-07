@@ -76,20 +76,25 @@ export const PEDIDOS_PAGE_SIZE = 20
 export function usePedidos(
   clienteId: string | null,
   status: string,
+  semNfVinculada: boolean,
   page: number,
 ) {
   return useQuery({
-    queryKey: ['pedidos', { clienteId, status, page }],
+    queryKey: ['pedidos', { clienteId, status, semNfVinculada, page }],
     queryFn: async () => {
       const { data } = await api.get<SpringPage<Pedido> | Pedido[]>(
         '/pedidos',
         {
-          params: {
-            clienteId: clienteId ?? undefined,
-            status: status || undefined,
-            page,
-            size: PEDIDOS_PAGE_SIZE,
-          },
+          /* semNfVinculada=true ignora os demais filtros — o backend já
+             retorna só pedidos FATURADOS sem NF ativa vinculada */
+          params: semNfVinculada
+            ? { semNfVinculada: true, page, size: PEDIDOS_PAGE_SIZE }
+            : {
+                clienteId: clienteId ?? undefined,
+                status: status || undefined,
+                page,
+                size: PEDIDOS_PAGE_SIZE,
+              },
         },
       )
       return data

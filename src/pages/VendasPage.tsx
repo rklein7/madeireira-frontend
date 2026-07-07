@@ -683,7 +683,7 @@ function AbaPedidos({
     pedido: Pedido
   } | null>(null)
 
-  const pedidosQuery = usePedidos(cliente?.id ?? null, status, page)
+  const pedidosQuery = usePedidos(cliente?.id ?? null, status, false, page)
   const confirmar = useConfirmarPedido()
   const faturar = useFaturarPedido()
   const entregar = useEntregarPedido()

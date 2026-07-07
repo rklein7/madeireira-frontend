@@ -1,7 +1,11 @@
 import { useEffect } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { toast } from 'sonner'
 import {
+  AlertCircle,
   AlertTriangle,
+  ChevronRight,
+  Clock,
   Coins,
   Package,
   Receipt,
@@ -19,11 +23,12 @@ import {
 } from '@/components/ui/table'
 import {
   toList,
+  useAlertas,
   useContasVencer,
-  useEstoqueAlertas,
   usePedidosMes,
   usePedidosRecentes,
   useProdutosTotal,
+  type Alerta,
   type ContaReceber,
   type Pedido,
 } from '@/hooks/useDashboard'
@@ -42,20 +47,6 @@ const dataCurta = new Intl.DateTimeFormat('pt-BR', {
   year: 'numeric',
 })
 
-function relativeTime(iso?: string): string {
-  if (!iso) return ''
-  const date = new Date(iso)
-  if (Number.isNaN(date.getTime())) return ''
-  const rtf = new Intl.RelativeTimeFormat('pt-BR', { numeric: 'auto' })
-  const minutes = Math.round((date.getTime() - Date.now()) / 60_000)
-  if (Math.abs(minutes) < 60) return rtf.format(minutes, 'minute')
-  const hours = Math.round(minutes / 60)
-  if (Math.abs(hours) < 24) return rtf.format(hours, 'hour')
-  const days = Math.round(hours / 24)
-  if (Math.abs(days) < 30) return rtf.format(days, 'day')
-  return rtf.format(Math.round(days / 30), 'month')
-}
-
 function nomeCliente(item: Pedido | ContaReceber): string {
   if (typeof item.cliente === 'string') return item.cliente
   return item.cliente?.nome ?? item.clienteNome ?? '—'
@@ -67,16 +58,6 @@ function valorPedido(pedido: Pedido): number {
 
 function valorConta(conta: ContaReceber): number {
   return conta.valor ?? conta.valorTotal ?? 0
-}
-
-function vencimentoConta(conta: ContaReceber): string | undefined {
-  return conta.dataVencimento ?? conta.vencimento
-}
-
-function venceEmAteMs(conta: ContaReceber, ms: number): boolean {
-  const venc = vencimentoConta(conta)
-  if (!venc) return false
-  return new Date(venc).getTime() - Date.now() <= ms
 }
 
 function useErrorToast(isError: boolean, message: string) {
@@ -94,6 +75,7 @@ function KpiCard({
   icon: Icon,
   gradient,
   loading,
+  to,
 }: {
   label: string
   value: string
@@ -101,28 +83,36 @@ function KpiCard({
   icon: LucideIcon
   gradient: string
   loading: boolean
+  to: string
 }) {
+  const navigate = useNavigate()
   return (
     <div
-      className="relative overflow-hidden rounded-[20px] p-5"
+      role="button"
+      tabIndex={0}
+      onClick={() => navigate(to)}
+      onKeyDown={(event) => {
+        if (event.key === 'Enter' || event.key === ' ') navigate(to)
+      }}
+      className="relative cursor-pointer overflow-hidden rounded-[20px] p-3.5 transition-transform duration-200 ease-out hover:z-10 hover:scale-[1.03] hover:shadow-[0_8px_32px_rgba(0,0,0,0.25)]"
       style={{ background: gradient }}
     >
       <Icon
-        className="absolute -right-2 -top-2 text-white/10"
-        size={72}
+        className="absolute -right-1.5 -top-1.5 text-white/10"
+        size={60}
         strokeWidth={1.5}
       />
-      <p className="text-xs font-medium uppercase tracking-wider text-white/55">
+      <p className="text-[10px] font-medium uppercase tracking-wider text-white/55">
         {label}
       </p>
       {loading ? (
-        <Skeleton className="mt-2 h-8 w-24 bg-white/15" />
+        <Skeleton className="mt-2 h-6 w-20 bg-white/15" />
       ) : (
-        <p className="mt-1 text-[26px] font-bold leading-tight text-white">
+        <p className="mt-1 text-[22px] font-bold leading-tight text-white">
           {value}
         </p>
       )}
-      <span className="mt-3 inline-block rounded-full bg-black/25 px-2.5 py-1 text-xs text-white/75">
+      <span className="mt-2 inline-block rounded-full bg-black/25 px-2 py-0.5 text-[11px] text-white/75">
         {badge}
       </span>
     </div>
@@ -187,40 +177,42 @@ function GlassPanel({
 
 /* ---------- alertas ---------- */
 
-interface AlertaItem {
-  key: string
-  tipo: 'critico' | 'aviso' | 'info'
-  titulo: string
-  subtitulo: string
-  quando: string
-}
-
-const dotStyles: Record<AlertaItem['tipo'], string> = {
+const dotStyles: Record<Alerta['tipo'], string> = {
   critico: 'bg-red-500 shadow-[0_0_8px_rgba(239,68,68,0.9)]',
-  aviso: 'bg-amber-500',
+  atencao: 'bg-amber-500',
   info: 'bg-blue-400',
 }
 
-function AlertaRow({ alerta }: { alerta: AlertaItem }) {
+function AlertaRow({ alerta }: { alerta: Alerta }) {
+  const navigate = useNavigate()
   return (
-    <li className="flex items-start gap-3 py-2.5">
-      <span
-        className={cn(
-          'mt-1.5 h-2 w-2 shrink-0 rounded-full',
-          dotStyles[alerta.tipo],
+    <li>
+      <button
+        type="button"
+        onClick={() => navigate(alerta.href)}
+        className="flex w-full items-start gap-3 py-2.5 text-left"
+      >
+        <span
+          className={cn(
+            'mt-1.5 h-2 w-2 shrink-0 rounded-full',
+            dotStyles[alerta.tipo],
+          )}
+        />
+        <span className="min-w-0 flex-1">
+          <span className="block truncate text-sm text-[color:var(--text-primary)]">
+            {alerta.titulo}
+          </span>
+          <span className="block truncate text-xs text-[color:var(--text-secondary)]">
+            {alerta.subtitulo}
+          </span>
+        </span>
+        {alerta.tempo && (
+          <span className="shrink-0 text-xs text-[color:var(--text-muted)]">
+            {alerta.tempo}
+          </span>
         )}
-      />
-      <span className="min-w-0 flex-1">
-        <span className="block truncate text-sm text-[color:var(--text-primary)]">
-          {alerta.titulo}
-        </span>
-        <span className="block truncate text-xs text-[color:var(--text-secondary)]">
-          {alerta.subtitulo}
-        </span>
-      </span>
-      <span className="shrink-0 text-xs text-[color:var(--text-muted)]">
-        {alerta.quando}
-      </span>
+        <ChevronRight className="mt-0.5 h-4 w-4 shrink-0 text-white/30" />
+      </button>
     </li>
   )
 }
@@ -231,13 +223,19 @@ export default function DashboardPage() {
   const produtosTotal = useProdutosTotal()
   const pedidosMes = usePedidosMes()
   const contas = useContasVencer()
-  const alertasEstoque = useEstoqueAlertas()
   const pedidosRecentes = usePedidosRecentes()
+  const {
+    alertas,
+    isLoading: carregandoAlertas,
+    isError: erroAlertas,
+    estoqueCriticoTotal,
+    contasVencidasTotal,
+    pedidosConfirmadosTotal,
+  } = useAlertas()
 
   useErrorToast(produtosTotal.isError, 'Erro ao carregar total de produtos')
   useErrorToast(pedidosMes.isError, 'Erro ao carregar pedidos do mês')
   useErrorToast(contas.isError, 'Erro ao carregar contas a receber')
-  useErrorToast(alertasEstoque.isError, 'Erro ao carregar alertas de estoque')
   useErrorToast(pedidosRecentes.isError, 'Erro ao carregar pedidos recentes')
 
   const contasAbertas = toList(contas.data)
@@ -245,50 +243,19 @@ export default function DashboardPage() {
     (soma, conta) => soma + valorConta(conta),
     0,
   )
-  const produtosCriticos = toList(alertasEstoque.data)
   const pedidos = toList(pedidosRecentes.data)
 
   const mesAtual = new Intl.DateTimeFormat('pt-BR', { month: 'long' }).format(
     new Date(),
   )
 
-  /* monta a lista do painel de alertas */
-  const seteDias = 7 * 24 * 60 * 60 * 1000
-  const contasVencendo = contasAbertas.filter((conta) =>
-    venceEmAteMs(conta, seteDias),
-  )
-
-  const alertas: AlertaItem[] = [
-    ...produtosCriticos.slice(0, 3).map((produto) => ({
-      key: `estoque-${produto.id}`,
-      tipo: 'critico' as const,
-      titulo: produto.nome,
-      subtitulo: `Estoque: ${produto.estoqueAtual ?? '?'} ${produto.unidade ?? ''} · mín. ${produto.estoqueMinimo ?? '?'}`,
-      quando: relativeTime(produto.atualizadoEm) || 'agora',
-    })),
-    ...contasVencendo.slice(0, 2).map((conta) => ({
-      key: `conta-${conta.id}`,
-      tipo: 'aviso' as const,
-      titulo: `A receber de ${nomeCliente(conta)}`,
-      subtitulo: brl.format(valorConta(conta)),
-      quando: relativeTime(vencimentoConta(conta)),
-    })),
-    ...pedidos.slice(0, 1).map((pedido) => ({
-      key: `pedido-${pedido.id}`,
-      tipo: 'info' as const,
-      titulo: `Pedido ${pedido.numero ?? `#${pedido.id}`} criado`,
-      subtitulo: `${nomeCliente(pedido)} · ${brl.format(valorPedido(pedido))}`,
-      quando: relativeTime(pedido.criadoEm),
-    })),
-  ]
-
-  const carregandoAlertas = alertasEstoque.isLoading || contas.isLoading
+  const listaVazia = !carregandoAlertas && alertas.length === 0
 
   return (
     <Shell title="Dashboard" subtitle="Visão geral do negócio">
       <div className="space-y-4">
-        {/* KPIs */}
-        <div className="grid grid-cols-2 gap-4 xl:grid-cols-4">
+        {/* KPIs — 6 cards em 2 linhas de 3 */}
+        <div className="grid grid-cols-2 gap-4 md:grid-cols-3">
           <KpiCard
             label="Produtos em estoque"
             value={String(produtosTotal.data ?? '—')}
@@ -296,6 +263,7 @@ export default function DashboardPage() {
             icon={Package}
             gradient="linear-gradient(135deg, #14532d 0%, #15803d 100%)"
             loading={produtosTotal.isLoading}
+            to="/cadastros/produtos"
           />
           <KpiCard
             label="Pedidos do mês"
@@ -304,9 +272,10 @@ export default function DashboardPage() {
             icon={Receipt}
             gradient="linear-gradient(135deg, #1e3a5f 0%, #1d4ed8 100%)"
             loading={pedidosMes.isLoading}
+            to="/vendas"
           />
           <KpiCard
-            label="A receber"
+            label={`A receber ${mesAtual}`}
             value={contas.isError ? '—' : brl.format(totalReceber)}
             badge={
               contas.isError
@@ -316,25 +285,39 @@ export default function DashboardPage() {
             icon={Coins}
             gradient="linear-gradient(135deg, #78350f 0%, #b45309 100%)"
             loading={contas.isLoading}
+            to="/financeiro"
           />
           <KpiCard
             label="Estoque crítico"
-            value={alertasEstoque.isError ? '—' : String(produtosCriticos.length)}
-            badge={
-              alertasEstoque.isError
-                ? 'sem dados'
-                : produtosCriticos.length > 0
-                  ? 'requer atenção'
-                  : 'tudo certo'
-            }
+            value={erroAlertas ? '—' : String(estoqueCriticoTotal)}
+            badge={estoqueCriticoTotal > 0 ? 'requer atenção' : 'tudo certo'}
             icon={AlertTriangle}
             gradient="linear-gradient(135deg, #7f1d1d 0%, #b91c1c 100%)"
-            loading={alertasEstoque.isLoading}
+            loading={carregandoAlertas}
+            to="/estoque"
+          />
+          <KpiCard
+            label="Contas vencidas"
+            value={erroAlertas ? '—' : String(contasVencidasTotal)}
+            badge="vencidas sem pagamento"
+            icon={AlertCircle}
+            gradient="linear-gradient(135deg, #450a0a 0%, #7f1d1d 100%)"
+            loading={carregandoAlertas}
+            to="/financeiro"
+          />
+          <KpiCard
+            label="Pedidos pendentes"
+            value={erroAlertas ? '—' : String(pedidosConfirmadosTotal)}
+            badge="aguardando faturamento"
+            icon={Clock}
+            gradient="linear-gradient(135deg, #4c1d95 0%, #7c3aed 100%)"
+            loading={carregandoAlertas}
+            to="/vendas"
           />
         </div>
 
         {/* Linha inferior */}
-        <div className="grid grid-cols-1 gap-4 xl:grid-cols-[1fr_272px]">
+        <div className="grid grid-cols-1 gap-4 xl:grid-cols-[55fr_45fr]">
           <GlassPanel title="Pedidos recentes">
             <Table>
               <TableHeader>
@@ -423,14 +406,14 @@ export default function DashboardPage() {
                   </div>
                 ))}
               </div>
-            ) : alertas.length === 0 ? (
+            ) : listaVazia ? (
               <p className="py-4 text-center text-sm text-[color:var(--text-muted)]">
                 Nenhum alerta no momento
               </p>
             ) : (
               <ul className="divide-y divide-white/5">
                 {alertas.map((alerta) => (
-                  <AlertaRow key={alerta.key} alerta={alerta} />
+                  <AlertaRow key={alerta.id} alerta={alerta} />
                 ))}
               </ul>
             )}

@@ -1,4 +1,9 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
+import type {
+  ComponentProps,
+  ForwardRefExoticComponent,
+  RefAttributes,
+} from 'react'
 import {
   useFieldArray,
   useForm,
@@ -10,12 +15,15 @@ import { z } from 'zod'
 import { isAxiosError } from 'axios'
 import { toast } from 'sonner'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { PDFDownloadLink as PDFDownloadLinkBase } from '@react-pdf/renderer'
 import {
   ArrowDownCircle,
   ArrowUpCircle,
   Calculator,
   ChevronRight,
+  Download,
   Eye,
+  FileDown,
   FileText,
   Loader2,
   Plus,
@@ -81,6 +89,7 @@ import type { Produto } from '@/hooks/useProdutos'
 import { fetchPedido, type Pedido } from '@/hooks/useVendas'
 import {
   FISCAL_PAGE_SIZE,
+  fetchNotaFiscal,
   useCancelarNF,
   useEmitirSaida,
   useEscriturarEntrada,
@@ -94,7 +103,18 @@ import {
   type ResumoTributos,
   type ResumoTributosPeriodo,
 } from '@/hooks/useFiscal'
+import {
+  NotaFiscalPDF,
+  type NotaFiscalPDFProps,
+} from '@/components/pdf/NotaFiscalPDF'
 import { cn } from '@/lib/utils'
+
+/* A tipagem de @react-pdf/renderer declara PDFDownloadLink como class
+   component, mas em runtime é um forwardRef para a <a> real — refazemos
+   o tipo aqui para poder usar ref={...} apontando para HTMLAnchorElement. */
+const PDFDownloadLink = PDFDownloadLinkBase as unknown as ForwardRefExoticComponent<
+  ComponentProps<typeof PDFDownloadLinkBase> & RefAttributes<HTMLAnchorElement>
+>
 
 /* ---------- formatação ---------- */
 
@@ -231,6 +251,17 @@ function StatusNFPill({ status }: { status?: string | null }) {
     >
       {config.label}
     </span>
+  )
+}
+
+function PedidoBadge({ pedidoNumero }: { pedidoNumero?: string | null }) {
+  if (!pedidoNumero) {
+    return <span className="text-[color:var(--text-muted)]">—</span>
+  }
+  return (
+    <Badge className="whitespace-nowrap rounded-md border-transparent bg-blue-500/15 font-mono text-xs text-blue-400 hover:bg-blue-500/15">
+      {pedidoNumero}
+    </Badge>
   )
 }
 
@@ -940,11 +971,12 @@ const CFOPS_SAIDA: [string, string][] = [
 
 function useBuscaPedidosFaturados(busca: string) {
   const query = useQuery({
-    queryKey: ['pedidos', { status: 'FATURADO', busca, page: 0 }],
+    queryKey: ['pedidos', { semNfVinculada: true, busca, page: 0 }],
     queryFn: async () => {
+      /* semNfVinculada=true já retorna só pedidos FATURADOS sem NF ativa */
       const { data } = await api.get<SpringPage<Pedido> | Pedido[]>(
         '/pedidos',
-        { params: { status: 'FATURADO', busca, page: 0, size: 20 } },
+        { params: { semNfVinculada: true, busca, page: 0, size: 20 } },
       )
       return data
     },
@@ -1071,9 +1103,12 @@ function SaidaDialog({ onClose }: { onClose: () => void }) {
                           </span>
                         </>
                       )}
-                      placeholder="Buscar pedido faturado..."
+                      placeholder="Buscar pedido faturado disponível..."
                     />
                   </FormControl>
+                  <p className="text-[11px] text-[color:var(--text-muted)]">
+                    Apenas pedidos faturados sem NF emitida
+                  </p>
                   {clienteNome && (
                     <p className="text-xs text-[color:var(--text-muted)]">
                       Cliente: {clienteNome}
@@ -1260,6 +1295,191 @@ function tributoDoItem(
   return { aliq, valor: valorApi ?? base * (aliq / 100) }
 }
 
+/* ---------- PDF da NF ---------- */
+
+function notaParaPdf(nota: NotaFiscal): NotaFiscalPDFProps['nota'] {
+  const itens = nota.itens ?? []
+  const entrada = nota.tipo === 'ENTRADA'
+  const valorProdutos =
+    nota.valorProdutos ??
+    itens.reduce(
+      (soma, item) =>
+        soma + (item.valorTotal ?? (item.quantidade ?? 0) * (item.valorUnitario ?? 0)),
+      0,
+    )
+  const valorIcms =
+    nota.valorIcms ?? itens.reduce((s, i) => s + tributoDoItem(i, 'Icms').valor, 0)
+  const valorIpi =
+    nota.valorIpi ?? itens.reduce((s, i) => s + tributoDoItem(i, 'Ipi').valor, 0)
+  const valorPis =
+    nota.valorPis ?? itens.reduce((s, i) => s + tributoDoItem(i, 'Pis').valor, 0)
+  const valorCofins =
+    nota.valorCofins ?? itens.reduce((s, i) => s + tributoDoItem(i, 'Cofins').valor, 0)
+  const valorFrete = nota.valorFrete ?? 0
+  const valorSeguro = nota.valorSeguro ?? 0
+  const valorDesconto = nota.valorDesconto ?? 0
+
+  return {
+    numero: nota.numero ?? nota.id.slice(0, 8),
+    serie: nota.serie ?? '1',
+    cfop: nota.cfop ?? '—',
+    chaveAcesso: nota.chaveAcesso ?? undefined,
+    dataEmissao: nota.dataEmissao ?? new Date().toISOString(),
+    dataEntradaSaida: nota.dataEntradaSaida ?? undefined,
+    naturezaOperacao: nota.naturezaOperacao ?? undefined,
+    status: nota.status ?? '',
+    tipo: nota.tipo ?? '',
+    valorProdutos,
+    valorFrete,
+    valorSeguro,
+    valorDesconto,
+    valorIcms,
+    valorIpi,
+    valorPis,
+    valorCofins,
+    valorTotal:
+      nota.valorTotal ?? valorProdutos + valorFrete + valorSeguro - valorDesconto,
+    observacoes: nota.observacoes ?? undefined,
+    clienteNome: !entrada ? nomeParte(nota) : undefined,
+    clienteCpfCnpj: !entrada ? (nota.cliente?.cpfCnpj ?? undefined) : undefined,
+    fornecedorNome: entrada ? nomeParte(nota) : undefined,
+    fornecedorCpfCnpj: entrada ? (nota.fornecedor?.cpfCnpj ?? undefined) : undefined,
+    pedidoNumero: nota.pedidoNumero ?? undefined,
+    itens: itens.map((item, index) => ({
+      numeroItem: item.numeroItem ?? index + 1,
+      produtoCodigo: itemCodigo(item),
+      produtoDescricao: itemDescricao(item),
+      unidadeMedida: item.unidadeMedida ?? item.produto?.unidadeMedida ?? '',
+      quantidade: item.quantidade ?? 0,
+      valorUnitario: item.valorUnitario ?? 0,
+      valorTotal:
+        item.valorTotal ?? (item.quantidade ?? 0) * (item.valorUnitario ?? 0),
+      cstIcms: item.cstIcms ?? undefined,
+      aliqIcms: item.aliqIcms ?? undefined,
+      valorIcms: tributoDoItem(item, 'Icms').valor,
+      cstIpi: item.cstIpi ?? undefined,
+      aliqIpi: item.aliqIpi ?? undefined,
+      valorIpi: tributoDoItem(item, 'Ipi').valor,
+      cstPis: item.cstPis ?? undefined,
+      aliqPis: item.aliqPis ?? undefined,
+      valorPis: tributoDoItem(item, 'Pis').valor,
+      cstCofins: item.cstCofins ?? undefined,
+      aliqCofins: item.aliqCofins ?? undefined,
+      valorCofins: tributoDoItem(item, 'Cofins').valor,
+    })),
+  }
+}
+
+/** dispara o clique assim que o blob do PDF fica pronto (roda em efeito,
+    não durante o render do PDFDownloadLink) */
+function DisparadorDownload({
+  loading,
+  url,
+  onPronto,
+}: {
+  loading: boolean
+  url: string | null
+  onPronto: () => void
+}) {
+  useEffect(() => {
+    if (!loading && url) onPronto()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loading, url])
+  return null
+}
+
+/** Botão de baixar PDF da NF — só deve ser usado para tipo === 'SAIDA'.
+    - `nota` já carregada (drawer): gera na hora
+    - `nfId` (tabela): busca o detalhe completo antes de gerar */
+function BotaoNfPdf({
+  nota,
+  nfId,
+  variante = 'icone',
+}: {
+  nota?: NotaFiscal
+  nfId?: string
+  variante?: 'icone' | 'botao'
+}) {
+  const [notaPdf, setNotaPdf] = useState<NotaFiscalPDFProps['nota'] | null>(
+    null,
+  )
+  const [buscando, setBuscando] = useState(false)
+  const linkRef = useRef<HTMLAnchorElement>(null)
+  const queryClient = useQueryClient()
+
+  async function gerar() {
+    if (nota) {
+      setNotaPdf(notaParaPdf(nota))
+      return
+    }
+    if (!nfId) return
+    setBuscando(true)
+    try {
+      const detalhe = await queryClient.fetchQuery(fetchNotaFiscal(nfId))
+      setNotaPdf(notaParaPdf(detalhe))
+    } catch {
+      toast.error('Erro ao carregar a NF para gerar o PDF')
+    } finally {
+      setBuscando(false)
+    }
+  }
+
+  return (
+    <>
+      {variante === 'icone' ? (
+        <button
+          type="button"
+          title="Baixar PDF"
+          onClick={gerar}
+          disabled={buscando}
+          className={cn(botaoAcaoClass, buscando && 'opacity-50')}
+        >
+          {buscando ? (
+            <Loader2 className="h-4 w-4 animate-spin" />
+          ) : (
+            <FileDown className="h-4 w-4" />
+          )}
+        </button>
+      ) : (
+        <Button
+          type="button"
+          variant="ghost"
+          onClick={gerar}
+          disabled={buscando}
+          className="text-[color:var(--text-secondary)] hover:bg-white/[0.06] hover:text-white"
+        >
+          {buscando ? (
+            <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />
+          ) : (
+            <Download className="mr-1.5 h-4 w-4" />
+          )}
+          Baixar PDF
+        </Button>
+      )}
+
+      {notaPdf && (
+        <PDFDownloadLink
+          ref={linkRef}
+          document={<NotaFiscalPDF nota={notaPdf} />}
+          fileName={`NF-${notaPdf.numero}-${notaPdf.serie}.pdf`}
+          style={{ display: 'none' }}
+        >
+          {({ loading, url }) => (
+            <DisparadorDownload
+              loading={loading}
+              url={url}
+              onPronto={() => {
+                linkRef.current?.click()
+                setNotaPdf(null)
+              }}
+            />
+          )}
+        </PDFDownloadLink>
+      )}
+    </>
+  )
+}
+
 function NotaDrawer({
   notaId,
   onClose,
@@ -1334,6 +1554,16 @@ function NotaDrawer({
                 <p className="mb-1 text-xs font-semibold uppercase tracking-wider text-[color:var(--text-muted)]">
                   Nota fiscal
                 </p>
+                <div className="mb-2 flex items-center gap-2 text-sm text-[color:var(--text-secondary)]">
+                  Pedido vinculado:{' '}
+                  {nota.pedidoNumero ? (
+                    <Badge className="rounded-md border-transparent bg-blue-500/15 font-mono text-xs text-blue-400 hover:bg-blue-500/15">
+                      {nota.pedidoNumero}
+                    </Badge>
+                  ) : (
+                    <span className="text-white">—</span>
+                  )}
+                </div>
                 <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-sm">
                   <p className="text-[color:var(--text-secondary)]">
                     CFOP: <span className="text-white">{nota.cfop ?? '—'}</span>
@@ -1480,7 +1710,15 @@ function NotaDrawer({
                 )}
               </span>
             </div>
-            <div className="mt-3 flex justify-end">
+            <div
+              className={cn(
+                'mt-3 flex items-center gap-2',
+                nota.tipo === 'SAIDA' ? 'justify-between' : 'justify-end',
+              )}
+            >
+              {nota.tipo === 'SAIDA' && (
+                <BotaoNfPdf nota={nota} variante="botao" />
+              )}
               <Button
                 variant="ghost"
                 disabled={nota.status === 'CANCELADA'}
@@ -1500,8 +1738,12 @@ function NotaDrawer({
 
 /* ---------- aba 1: notas fiscais ---------- */
 
-function AbaNotas() {
-  const [tipo, setTipo] = useState('')
+type LayoutNotas = 'todas' | 'entrada' | 'saida'
+
+function AbaNotasFiscais({ layout }: { layout: LayoutNotas }) {
+  const tipoFixo = layout === 'entrada' ? 'ENTRADA' : layout === 'saida' ? 'SAIDA' : null
+
+  const [tipo, setTipo] = useState('') // só editável quando layout === 'todas'
   const [status, setStatus] = useState('')
   const [fornecedor, setFornecedor] = useState<Fornecedor | null>(null)
   const [cliente, setCliente] = useState<Cliente | null>(null)
@@ -1513,11 +1755,18 @@ function AbaNotas() {
   const [modalSaida, setModalSaida] = useState(false)
   const [cancelando, setCancelando] = useState<NotaFiscal | null>(null)
 
+  const tipoEfetivo = tipoFixo ?? tipo
+  const mostrarFiltroTipo = layout === 'todas'
+  const mostrarFiltroFornecedor =
+    layout === 'entrada' || (layout === 'todas' && tipoEfetivo === 'ENTRADA')
+  const mostrarFiltroCliente =
+    layout === 'saida' || (layout === 'todas' && tipoEfetivo === 'SAIDA')
+
   const notasQuery = useNotasFiscais(
-    tipo,
+    tipoEfetivo,
     status,
-    fornecedor?.id ?? null,
-    cliente?.id ?? null,
+    mostrarFiltroFornecedor ? (fornecedor?.id ?? null) : null,
+    mostrarFiltroCliente ? (cliente?.id ?? null) : null,
     de,
     ate,
     page,
@@ -1545,31 +1794,50 @@ function AbaNotas() {
     }
   }
 
+  function limparFiltros() {
+    setTipo('')
+    setStatus('')
+    setFornecedor(null)
+    setCliente(null)
+    setDe('')
+    setAte('')
+    setPage(0)
+  }
+
   const listaVazia = !carregando && notas.length === 0
+
+  const colunas =
+    layout === 'entrada'
+      ? ['Status', 'Número / Série', 'CFOP', 'Fornecedor', 'Data emissão', 'Valor total', 'Ações']
+      : layout === 'saida'
+        ? ['Status', 'Número / Série', 'Pedido', 'CFOP', 'Cliente', 'Data emissão', 'Valor total', 'Ações']
+        : ['Tipo', 'Número / Série', 'CFOP', 'Pedido', 'Emitente/Destinatário', 'Emissão', 'Valor total', 'Status', 'Ações']
 
   return (
     <div className="space-y-4">
       {/* Filtros */}
       <div className="flex flex-wrap items-center gap-3">
-        <Select
-          value={tipo || 'TODOS'}
-          onValueChange={(valor) => {
-            const novo = valor === 'TODOS' ? '' : valor
-            setTipo(novo)
-            if (novo !== 'ENTRADA') setFornecedor(null)
-            if (novo !== 'SAIDA') setCliente(null)
-            setPage(0)
-          }}
-        >
-          <SelectTrigger className={cn(inputDark, 'w-36')}>
-            <SelectValue placeholder="Tipo" />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="TODOS">Todos os tipos</SelectItem>
-            <SelectItem value="ENTRADA">Entrada</SelectItem>
-            <SelectItem value="SAIDA">Saída</SelectItem>
-          </SelectContent>
-        </Select>
+        {mostrarFiltroTipo && (
+          <Select
+            value={tipo || 'TODOS'}
+            onValueChange={(valor) => {
+              const novo = valor === 'TODOS' ? '' : valor
+              setTipo(novo)
+              if (novo !== 'ENTRADA') setFornecedor(null)
+              if (novo !== 'SAIDA') setCliente(null)
+              setPage(0)
+            }}
+          >
+            <SelectTrigger className={cn(inputDark, 'w-36')}>
+              <SelectValue placeholder="Tipo" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="TODOS">Todos os tipos</SelectItem>
+              <SelectItem value="ENTRADA">Entrada</SelectItem>
+              <SelectItem value="SAIDA">Saída</SelectItem>
+            </SelectContent>
+          </Select>
+        )}
 
         <Select
           value={status || 'TODOS'}
@@ -1589,7 +1857,7 @@ function AbaNotas() {
           </SelectContent>
         </Select>
 
-        {tipo === 'ENTRADA' && (
+        {mostrarFiltroFornecedor && (
           <FornecedorCombobox
             value={fornecedor}
             onChange={(novo) => {
@@ -1599,7 +1867,7 @@ function AbaNotas() {
             className="w-full max-w-60"
           />
         )}
-        {tipo === 'SAIDA' && (
+        {mostrarFiltroCliente && (
           <ClienteCombobox
             value={cliente}
             onChange={(novo) => {
@@ -1632,33 +1900,30 @@ function AbaNotas() {
         />
         <Button
           variant="ghost"
-          onClick={() => {
-            setTipo('')
-            setStatus('')
-            setFornecedor(null)
-            setCliente(null)
-            setDe('')
-            setAte('')
-            setPage(0)
-          }}
+          onClick={limparFiltros}
           className="text-[color:var(--text-secondary)] hover:bg-white/[0.06] hover:text-white"
         >
           Limpar
         </Button>
 
-        <div className="ml-auto flex gap-2">
+        {layout === 'entrada' && (
           <Button
             onClick={() => setModalEntrada(true)}
-            className="bg-blue-500 font-semibold text-white hover:bg-blue-600"
+            className="ml-auto bg-blue-500 font-semibold text-white hover:bg-blue-600"
           >
             <ArrowDownCircle className="mr-1.5 h-4 w-4" />
             Escriturar NF entrada
           </Button>
-          <Button onClick={() => setModalSaida(true)} className={botaoVerdeClass}>
+        )}
+        {layout === 'saida' && (
+          <Button
+            onClick={() => setModalSaida(true)}
+            className={cn('ml-auto', botaoVerdeClass)}
+          >
             <ArrowUpCircle className="mr-1.5 h-4 w-4" />
             Emitir NF saída
           </Button>
-        </div>
+        )}
       </div>
 
       {/* Tabela / estado vazio */}
@@ -1675,16 +1940,7 @@ function AbaNotas() {
             <Table>
               <TableHeader>
                 <TableRow className="border-white/5 hover:bg-transparent">
-                  {[
-                    'Tipo',
-                    'Número / Série',
-                    'CFOP',
-                    'Emitente/Destinatário',
-                    'Emissão',
-                    'Valor total',
-                    'Status',
-                    'Ações',
-                  ].map((coluna) => (
+                  {colunas.map((coluna) => (
                     <TableHead
                       key={coluna}
                       className="h-10 whitespace-nowrap text-xs uppercase tracking-wider text-[color:var(--text-muted)]"
@@ -1701,7 +1957,7 @@ function AbaNotas() {
                       key={linha}
                       className="border-white/5 hover:bg-transparent"
                     >
-                      {Array.from({ length: 8 }).map((_, celula) => (
+                      {colunas.map((_, celula) => (
                         <TableCell key={celula}>
                           <Skeleton className="h-4 w-full max-w-24 bg-white/10" />
                         </TableCell>
@@ -1714,19 +1970,40 @@ function AbaNotas() {
                     key={nota.id}
                     className="border-white/5 hover:bg-white/[0.03]"
                   >
-                    <TableCell>
-                      <TipoPill tipo={nota.tipo} />
-                    </TableCell>
+                    {layout === 'todas' && (
+                      <TableCell>
+                        <TipoPill tipo={nota.tipo} />
+                      </TableCell>
+                    )}
+                    {layout !== 'todas' && (
+                      <TableCell>
+                        <StatusNFPill status={nota.status} />
+                      </TableCell>
+                    )}
                     <TableCell>
                       <Badge className="rounded-md border-transparent bg-white/10 font-mono text-xs text-white/70 hover:bg-white/10">
                         {nota.numero ?? '—'} / {nota.serie ?? '1'}
                       </Badge>
                     </TableCell>
+                    {layout === 'saida' && (
+                      <TableCell>
+                        <PedidoBadge pedidoNumero={nota.pedidoNumero} />
+                      </TableCell>
+                    )}
                     <TableCell>
                       <span className="inline-block rounded-md bg-white/[0.06] px-2 py-0.5 font-mono text-xs text-white/55">
                         {nota.cfop ?? '—'}
                       </span>
                     </TableCell>
+                    {layout === 'todas' && (
+                      <TableCell>
+                        <PedidoBadge
+                          pedidoNumero={
+                            nota.tipo === 'SAIDA' ? nota.pedidoNumero : null
+                          }
+                        />
+                      </TableCell>
+                    )}
                     <TableCell className="font-medium text-white">
                       {nomeParte(nota)}
                     </TableCell>
@@ -1736,9 +2013,11 @@ function AbaNotas() {
                     <TableCell className="whitespace-nowrap font-semibold text-white">
                       {brl.format(nota.valorTotal ?? 0)}
                     </TableCell>
-                    <TableCell>
-                      <StatusNFPill status={nota.status} />
-                    </TableCell>
+                    {layout === 'todas' && (
+                      <TableCell>
+                        <StatusNFPill status={nota.status} />
+                      </TableCell>
+                    )}
                     <TableCell>
                       <div className="flex items-center gap-1">
                         <button
@@ -1749,6 +2028,9 @@ function AbaNotas() {
                         >
                           <Eye className="h-4 w-4" />
                         </button>
+                        {nota.tipo === 'SAIDA' && (
+                          <BotaoNfPdf nfId={nota.id} variante="icone" />
+                        )}
                         <button
                           type="button"
                           title="Cancelar NF"
@@ -2126,16 +2408,20 @@ function AbaTributos() {
 /* ---------- página ---------- */
 
 export default function FiscalPage() {
-  const [aba, setAba] = useState<'notas' | 'tributos'>('notas')
+  const [aba, setAba] = useState<'todas' | 'entradas' | 'saidas' | 'tributos'>(
+    'todas',
+  )
 
   return (
     <Shell title="Fiscal" subtitle="Notas fiscais e tributos">
       <div className="space-y-4">
         {/* Abas pill */}
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           {(
             [
-              ['notas', 'Notas Fiscais'],
+              ['todas', 'Todas as NFs'],
+              ['entradas', 'Entradas'],
+              ['saidas', 'Saídas'],
               ['tributos', 'Resumo de Tributos'],
             ] as const
           ).map(([chave, rotulo]) => (
@@ -2155,7 +2441,12 @@ export default function FiscalPage() {
           ))}
         </div>
 
-        {aba === 'notas' ? <AbaNotas /> : <AbaTributos />}
+        {aba === 'todas' && <AbaNotasFiscais key="todas" layout="todas" />}
+        {aba === 'entradas' && (
+          <AbaNotasFiscais key="entradas" layout="entrada" />
+        )}
+        {aba === 'saidas' && <AbaNotasFiscais key="saidas" layout="saida" />}
+        {aba === 'tributos' && <AbaTributos />}
       </div>
     </Shell>
   )

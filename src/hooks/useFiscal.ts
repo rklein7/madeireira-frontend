@@ -78,6 +78,7 @@ export interface NotaFiscal {
   valorCofins?: number | null
   valorTotal?: number | null
   status?: string | null
+  observacoes?: string | null
   itens?: NotaFiscalItem[]
 }
 
@@ -194,6 +195,18 @@ export function useNotaFiscal(id: string | null) {
     },
     enabled: id != null,
   })
+}
+
+/** queryFn avulsa para pré-carregar a NF antes de gerar o PDF
+    (mesma chave do useNotaFiscal, então o cache é compartilhado). */
+export function fetchNotaFiscal(id: string) {
+  return {
+    queryKey: ['fiscal', 'detalhe', id] as const,
+    queryFn: async () => {
+      const { data } = await api.get<NotaFiscal>(`/fiscal/${id}`)
+      return data
+    },
+  }
 }
 
 /** NF de entrada mexe em estoque e contas a pagar — invalida tudo */
