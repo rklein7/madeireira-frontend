@@ -953,12 +953,7 @@ function useBuscaPedidosFaturados(busca: string) {
 }
 
 function nomeClientePedido(pedido: Pedido): string {
-  return (
-    pedido.cliente?.razaoSocial ??
-    pedido.cliente?.nome ??
-    pedido.clienteNome ??
-    '—'
-  )
+  return pedido.clienteNome ?? '—'
 }
 
 function SaidaDialog({ onClose }: { onClose: () => void }) {

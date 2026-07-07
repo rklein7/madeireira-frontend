@@ -10,4 +10,10 @@ export default defineConfig({
       '@': path.resolve(__dirname, './src'),
     },
   },
+  optimizeDeps: {
+    /* @react-pdf/renderer usa dependências CJS profundas (base64-js via
+       unicode-properties/linebreak) que precisam ser pré-empacotadas
+       explicitamente para o interop CJS→ESM funcionar no dev server. */
+    include: ['@react-pdf/renderer', 'base64-js', 'unicode-properties', 'linebreak'],
+  },
 })

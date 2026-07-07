@@ -30,14 +30,17 @@ export interface Pedido {
   numero?: string | null
   clienteId?: string | null
   clienteNome?: string | null
-  cliente?: {
-    id?: string
-    razaoSocial?: string
-    nome?: string
-    cpfCnpj?: string | null
-    cidade?: string | null
-    uf?: string | null
-  } | null
+  clienteCpfCnpj?: string | null
+  clienteIe?: string | null
+  clienteEndereco?: string | null
+  clienteBairro?: string | null
+  clienteCidade?: string | null
+  clienteUf?: string | null
+  clienteCep?: string | null
+  clienteTelefone?: string | null
+  clienteEmail?: string | null
+  vendedorId?: string | null
+  vendedorNome?: string | null
   condicaoPagamento?: string | null
   parcelas?: number | null
   valorFrete?: number | null
@@ -56,6 +59,7 @@ export interface Pedido {
 
 export interface PedidoInput {
   clienteId: string // UUID
+  vendedorId?: string // UUID
   condicaoPagamento: string
   parcelas?: number
   valorFrete?: number

@@ -1,4 +1,9 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
+import type {
+  ComponentProps,
+  ForwardRefExoticComponent,
+  RefAttributes,
+} from 'react'
 import {
   useFieldArray,
   useForm,
@@ -10,9 +15,12 @@ import { z } from 'zod'
 import { isAxiosError } from 'axios'
 import { toast } from 'sonner'
 import { useQueryClient } from '@tanstack/react-query'
+import { PDFDownloadLink as PDFDownloadLinkBase } from '@react-pdf/renderer'
 import {
   CheckCircle,
+  Download,
   Eye,
+  FileDown,
   FileText,
   Loader2,
   Pencil,
@@ -24,6 +32,7 @@ import {
 } from 'lucide-react'
 import { Shell } from '@/components/layout/Shell'
 import { ClienteCombobox, ProdutoCombobox } from '@/components/ComboboxBusca'
+import { PedidoPDF, type PedidoPDFProps } from '@/components/pdf/PedidoPDF'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -65,6 +74,7 @@ import {
 import { toList, totalOf } from '@/hooks/useDashboard'
 import type { Cliente } from '@/hooks/useClientes'
 import type { Produto } from '@/hooks/useProdutos'
+import { useUsuarios } from '@/hooks/useUsuarios'
 import {
   fetchPedido,
   PEDIDOS_PAGE_SIZE,
@@ -82,6 +92,13 @@ import {
   type PedidoItem,
 } from '@/hooks/useVendas'
 import { cn } from '@/lib/utils'
+
+/* A tipagem de @react-pdf/renderer declara PDFDownloadLink como class
+   component, mas em runtime é um forwardRef para a <a> real — refazemos
+   o tipo aqui para poder usar ref={...} apontando para HTMLAnchorElement. */
+const PDFDownloadLink = PDFDownloadLinkBase as unknown as ForwardRefExoticComponent<
+  ComponentProps<typeof PDFDownloadLinkBase> & RefAttributes<HTMLAnchorElement>
+>
 
 /* ---------- formatação e configs ---------- */
 
@@ -163,12 +180,7 @@ function condicaoLabel(pedido: Pedido): string {
 }
 
 function nomeCliente(pedido: Pedido): string {
-  return (
-    pedido.cliente?.razaoSocial ??
-    pedido.cliente?.nome ??
-    pedido.clienteNome ??
-    '—'
-  )
+  return pedido.clienteNome ?? '—'
 }
 
 type AcaoStatus = 'confirmar' | 'faturar' | 'entregar' | 'cancelar'
@@ -206,6 +218,9 @@ const acoesConfig: Record<
 
 const inputDark =
   'h-10 border-white/10 bg-white/5 placeholder:text-[color:var(--text-muted)]'
+
+/* Radix Select não aceita value="" — sentinela para "sem vendedor" */
+const SEM_VENDEDOR = '__SEM_VENDEDOR__'
 
 const botaoAcaoClass =
   'flex h-8 w-8 items-center justify-center rounded-lg text-[color:var(--text-secondary)] transition-colors hover:bg-white/[0.08] hover:text-white'
@@ -276,6 +291,7 @@ function AcoesPedido({
           <Eye className="h-4 w-4" />
         </button>
       )}
+      <BotaoPdfPedido pedidoId={pedido.id} variante="icone" />
     </div>
   )
 }
@@ -300,6 +316,166 @@ function valorItem(item: PedidoItem): number {
   const preco = item.precoUnitario ?? 0
   const desconto = item.descontoPerc ?? 0
   return quantidade * preco * (1 - desconto / 100)
+}
+
+/* ---------- PDF do pedido ---------- */
+
+function pedidoParaPdf(pedido: Pedido): PedidoPDFProps['pedido'] {
+  const itens = pedido.itens ?? []
+  const subtotal =
+    pedido.subtotal ??
+    pedido.valorProdutos ??
+    itens.reduce((soma, item) => soma + valorItem(item), 0)
+  const frete = pedido.valorFrete ?? 0
+  const total = pedido.valorTotal ?? subtotal + frete
+
+  return {
+    numero: pedido.numero ?? pedido.id.slice(0, 8),
+    status: pedido.status ?? '',
+    condicaoPagamento: pedido.condicaoPagamento ?? '',
+    parcelas: pedido.parcelas ?? 1,
+    valorSubtotal: subtotal,
+    valorFrete: frete,
+    valorTotal: total,
+    observacoes: pedido.observacoes ?? undefined,
+    criadoEm: pedido.criadoEm ?? new Date().toISOString(),
+    clienteNome: nomeCliente(pedido),
+    clienteCpfCnpj: pedido.clienteCpfCnpj ?? '—',
+    clienteIe: pedido.clienteIe ?? undefined,
+    clienteEndereco: pedido.clienteEndereco ?? undefined,
+    clienteBairro: pedido.clienteBairro ?? undefined,
+    clienteCidade: pedido.clienteCidade ?? undefined,
+    clienteUf: pedido.clienteUf ?? undefined,
+    clienteCep: pedido.clienteCep ?? undefined,
+    clienteTelefone: pedido.clienteTelefone ?? undefined,
+    clienteEmail: pedido.clienteEmail ?? undefined,
+    vendedorNome: pedido.vendedorNome ?? undefined,
+    /* tributos ainda não configurados no backend — zerados por enquanto */
+    valorIcms: 0,
+    valorIpi: 0,
+    valorPis: 0,
+    valorCofins: 0,
+    valorIcmsSt: 0,
+    itens: itens.map((item) => ({
+      produtoCodigo: itemCodigo(item),
+      produtoDescricao: itemDescricao(item),
+      unidadeMedida: item.unidadeMedida ?? item.produto?.unidadeMedida ?? '',
+      quantidade: item.quantidade ?? 0,
+      precoUnitario: item.precoUnitario ?? 0,
+      descontoPerc: item.descontoPerc ?? 0,
+      valorTotal: valorItem(item),
+    })),
+  }
+}
+
+/** dispara o clique assim que o blob do PDF fica pronto (roda em efeito,
+    não durante o render do PDFDownloadLink) */
+function DisparadorDownload({
+  loading,
+  url,
+  onPronto,
+}: {
+  loading: boolean
+  url: string | null
+  onPronto: () => void
+}) {
+  useEffect(() => {
+    if (!loading && url) onPronto()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loading, url])
+  return null
+}
+
+/** Botão de baixar PDF — funciona em dois modos:
+    - `pedido` já carregado (drawer): gera na hora
+    - `pedidoId` (tabela): busca o detalhe completo antes de gerar */
+function BotaoPdfPedido({
+  pedido,
+  pedidoId,
+  variante = 'icone',
+}: {
+  pedido?: Pedido
+  pedidoId?: string
+  variante?: 'icone' | 'botao'
+}) {
+  const [pedidoPdf, setPedidoPdf] = useState<PedidoPDFProps['pedido'] | null>(
+    null,
+  )
+  const [buscando, setBuscando] = useState(false)
+  const linkRef = useRef<HTMLAnchorElement>(null)
+  const queryClient = useQueryClient()
+
+  async function gerar() {
+    if (pedido) {
+      setPedidoPdf(pedidoParaPdf(pedido))
+      return
+    }
+    if (!pedidoId) return
+    setBuscando(true)
+    try {
+      const detalhe = await queryClient.fetchQuery(fetchPedido(pedidoId))
+      setPedidoPdf(pedidoParaPdf(detalhe))
+    } catch {
+      toast.error('Erro ao carregar o pedido para gerar o PDF')
+    } finally {
+      setBuscando(false)
+    }
+  }
+
+  return (
+    <>
+      {variante === 'icone' ? (
+        <button
+          type="button"
+          title="Baixar PDF"
+          onClick={gerar}
+          disabled={buscando}
+          className={cn(botaoAcaoClass, buscando && 'opacity-50')}
+        >
+          {buscando ? (
+            <Loader2 className="h-4 w-4 animate-spin" />
+          ) : (
+            <FileDown className="h-4 w-4" />
+          )}
+        </button>
+      ) : (
+        <Button
+          type="button"
+          variant="ghost"
+          onClick={gerar}
+          disabled={buscando}
+          className="text-[color:var(--text-secondary)] hover:bg-white/[0.06] hover:text-white"
+        >
+          {buscando ? (
+            <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />
+          ) : (
+            <Download className="mr-1.5 h-4 w-4" />
+          )}
+          Baixar PDF
+        </Button>
+      )}
+
+      {pedidoPdf && (
+        <PDFDownloadLink
+          ref={linkRef}
+          document={<PedidoPDF pedido={pedidoPdf} />}
+          fileName={`Pedido-${pedidoPdf.numero}.pdf`}
+          style={{ display: 'none' }}
+        >
+          {({ loading, url }) => (
+            <DisparadorDownload
+              loading={loading}
+              url={url}
+              onPronto={() => {
+                linkRef.current?.click()
+                setPedidoPdf(null)
+              }}
+            />
+          )}
+        </PDFDownloadLink>
+      )}
+    </>
+  )
 }
 
 function PedidoDrawer({
@@ -367,9 +543,9 @@ function PedidoDrawer({
                 </p>
                 <p className="font-semibold text-white">{nomeCliente(pedido)}</p>
                 <p className="text-sm text-[color:var(--text-secondary)]">
-                  {pedido.cliente?.cpfCnpj ?? '—'}
-                  {pedido.cliente?.cidade
-                    ? ` · ${pedido.cliente.cidade} / ${pedido.cliente.uf ?? '—'}`
+                  {pedido.clienteCpfCnpj ?? '—'}
+                  {pedido.clienteCidade
+                    ? ` · ${pedido.clienteCidade} / ${pedido.clienteUf ?? '—'}`
                     : ''}
                 </p>
               </section>
@@ -394,6 +570,12 @@ function PedidoDrawer({
                       {pedido.criadoEm
                         ? dataFmt.format(new Date(pedido.criadoEm))
                         : '—'}
+                    </span>
+                  </p>
+                  <p className="text-[color:var(--text-secondary)]">
+                    Vendedor:{' '}
+                    <span className="text-white">
+                      {pedido.vendedorNome ?? '—'}
                     </span>
                   </p>
                 </div>
@@ -467,7 +649,8 @@ function PedidoDrawer({
                 </span>
               </p>
             </div>
-            <div className="mt-3 flex justify-end">
+            <div className="mt-3 flex items-center justify-between gap-2">
+              <BotaoPdfPedido pedido={pedido} variante="botao" />
               <AcoesPedido
                 pedido={pedido}
                 onEditar={onEditar}
@@ -617,6 +800,7 @@ function AbaPedidos({
                   {[
                     'Número',
                     'Cliente',
+                    'Vendedor',
                     'Condição pgto',
                     'Itens',
                     'Valor total',
@@ -640,7 +824,7 @@ function AbaPedidos({
                       key={linha}
                       className="border-white/5 hover:bg-transparent"
                     >
-                      {Array.from({ length: 8 }).map((_, celula) => (
+                      {Array.from({ length: 9 }).map((_, celula) => (
                         <TableCell key={celula}>
                           <Skeleton className="h-4 w-full max-w-24 bg-white/10" />
                         </TableCell>
@@ -669,6 +853,9 @@ function AbaPedidos({
                       </TableCell>
                       <TableCell className="font-semibold text-white">
                         {nomeCliente(pedido)}
+                      </TableCell>
+                      <TableCell className="text-[color:var(--text-muted)]">
+                        {pedido.vendedorNome ?? '—'}
                       </TableCell>
                       <TableCell>
                         <span className="inline-block whitespace-nowrap rounded-full bg-white/10 px-2.5 py-0.5 text-xs text-white/70">
@@ -812,6 +999,7 @@ const itemSchema = z.object({
 const pedidoSchema = z
   .object({
     clienteId: z.string().min(1, 'Selecione o cliente'),
+    vendedorId: z.string(),
     condicaoPagamento: z.string().min(1, 'Selecione a condição'),
     parcelas: z.string(),
     valorFrete: z.string(),
@@ -850,7 +1038,8 @@ function itemVazio(): PedidoFormValues['itens'][number] {
 
 function pedidoParaForm(pedido: Pedido): PedidoFormValues {
   return {
-    clienteId: pedido.clienteId ?? pedido.cliente?.id ?? '',
+    clienteId: pedido.clienteId ?? '',
+    vendedorId: pedido.vendedorId ?? '',
     condicaoPagamento: pedido.condicaoPagamento ?? '',
     parcelas: pedido.parcelas != null ? String(pedido.parcelas) : '',
     valorFrete: pedido.valorFrete != null ? String(pedido.valorFrete) : '',
@@ -875,6 +1064,7 @@ function pedidoParaForm(pedido: Pedido): PedidoFormValues {
 function formParaPayload(values: PedidoFormValues): PedidoInput {
   return {
     clienteId: values.clienteId,
+    vendedorId: values.vendedorId || undefined,
     condicaoPagamento: values.condicaoPagamento,
     parcelas:
       values.condicaoPagamento === 'PARCELADO'
@@ -1056,9 +1246,9 @@ function FormPedido({
   const [cliente, setCliente] = useState<Cliente | null>(() =>
     editando
       ? ({
-          id: pedidoEditando.clienteId ?? pedidoEditando.cliente?.id ?? '',
+          id: pedidoEditando.clienteId ?? '',
           razaoSocial: nomeCliente(pedidoEditando),
-          cpfCnpj: pedidoEditando.cliente?.cpfCnpj ?? '',
+          cpfCnpj: pedidoEditando.clienteCpfCnpj ?? '',
           tipoPessoa: 'PJ',
         } as Cliente)
       : null,
@@ -1076,6 +1266,7 @@ function FormPedido({
       ? pedidoParaForm(pedidoEditando)
       : {
           clienteId: '',
+          vendedorId: '',
           condicaoPagamento: '',
           parcelas: '',
           valorFrete: '',
@@ -1083,6 +1274,11 @@ function FormPedido({
           itens: [itemVazio()],
         },
   })
+
+  const usuariosQuery = useUsuarios()
+  const vendedores = toList(usuariosQuery.data).filter(
+    (usuario) => usuario.ativo,
+  )
 
   const { fields, append, remove } = useFieldArray({
     control: form.control,
@@ -1227,6 +1423,39 @@ function FormPedido({
                       }}
                     />
                   </FormControl>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
+
+            <FormField
+              control={form.control}
+              name="vendedorId"
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel className="text-[color:var(--text-secondary)]">
+                    Vendedor
+                  </FormLabel>
+                  <Select
+                    value={field.value || undefined}
+                    onValueChange={(valor) =>
+                      field.onChange(valor === SEM_VENDEDOR ? '' : valor)
+                    }
+                  >
+                    <FormControl>
+                      <SelectTrigger className={inputDark}>
+                        <SelectValue placeholder="Selecionar vendedor (opcional)" />
+                      </SelectTrigger>
+                    </FormControl>
+                    <SelectContent>
+                      <SelectItem value={SEM_VENDEDOR}>Nenhum</SelectItem>
+                      {vendedores.map((usuario) => (
+                        <SelectItem key={usuario.id} value={usuario.id}>
+                          {usuario.nome}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
                   <FormMessage />
                 </FormItem>
               )}
