@@ -6,9 +6,12 @@ import { isAxiosError } from 'axios'
 import { toast } from 'sonner'
 import {
   AlertCircle,
+  ArrowDownCircle,
+  ArrowUpCircle,
   BarChart3,
   DollarSign,
   Eye,
+  History,
   Loader2,
   Scale,
   TrendingDown,
@@ -74,6 +77,7 @@ import {
   useContasPagar,
   useContasReceber,
   useFluxoCaixa,
+  useLancamentos,
   useLancarContaPagar,
   usePagarContaPagar,
   usePagarContaReceber,
@@ -82,8 +86,10 @@ import {
   type ContaReceber,
   type FluxoCaixa,
   type FluxoCaixaPeriodo,
+  type Lancamento,
   type PagamentoInput,
 } from '@/hooks/useFinanceiro'
+import { BANCOS, labelBanco, nomeBancoPorCodigo } from '@/lib/bancos'
 import { cn } from '@/lib/utils'
 
 /* ---------- formatação ---------- */
@@ -225,6 +231,9 @@ const numero = (valor: string) => {
   return Number.isFinite(n) ? n : 0
 }
 
+/* Radix Select não aceita value="" — sentinela para "sem banco" */
+const SEM_BANCO = '__SEM_BANCO__'
+
 const inputDark =
   'h-10 border-white/10 bg-white/5 placeholder:text-[color:var(--text-muted)]'
 
@@ -255,6 +264,7 @@ const pagamentoSchema = z.object({
     message: 'Informe um valor maior que zero',
   }),
   formaPagamento: z.string().min(1, 'Selecione a forma de pagamento'),
+  codigoBanco: z.string(),
   observacoes: z.string(),
 })
 
@@ -279,6 +289,7 @@ function PagamentoDialog({
       dataPagamento: hojeISO(),
       valorPago: valor ? String(valor) : '',
       formaPagamento: '',
+      codigoBanco: '',
       observacoes: '',
     },
   })
@@ -288,6 +299,8 @@ function PagamentoDialog({
       dataPagamento: values.dataPagamento,
       valorPago: numero(values.valorPago),
       formaPagamento: values.formaPagamento,
+      codigoBanco: values.codigoBanco || undefined,
+      nomeBanco: nomeBancoPorCodigo(values.codigoBanco),
       observacoes: values.observacoes.trim() || undefined,
     })
   }
@@ -375,6 +388,39 @@ function PagamentoDialog({
                       {Object.entries(formasPagamento).map(([valor, rotulo]) => (
                         <SelectItem key={valor} value={valor}>
                           {rotulo}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
+
+            <FormField
+              control={form.control}
+              name="codigoBanco"
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel className="text-[color:var(--text-secondary)]">
+                    Banco
+                  </FormLabel>
+                  <Select
+                    value={field.value || undefined}
+                    onValueChange={(valor) =>
+                      field.onChange(valor === SEM_BANCO ? '' : valor)
+                    }
+                  >
+                    <FormControl>
+                      <SelectTrigger className={cn(inputDark, 'w-full')}>
+                        <SelectValue placeholder="Selecionar banco (opcional)" />
+                      </SelectTrigger>
+                    </FormControl>
+                    <SelectContent>
+                      <SelectItem value={SEM_BANCO}>Nenhum</SelectItem>
+                      {BANCOS.map((banco) => (
+                        <SelectItem key={banco.codigo} value={banco.codigo}>
+                          {banco.codigo} — {banco.nome}
                         </SelectItem>
                       ))}
                     </SelectContent>
@@ -610,16 +656,256 @@ function EstadoVazio({
   )
 }
 
+/* ---------- aba: lançamentos ---------- */
+
+function TipoLancamentoPill({ tipo }: { tipo: Lancamento['tipo'] }) {
+  const recebimento = tipo === 'RECEBIMENTO'
+  return (
+    <span
+      className={cn(
+        'inline-flex items-center gap-1.5 whitespace-nowrap rounded-full px-2.5 py-0.5 text-xs font-medium',
+        recebimento
+          ? 'bg-[rgba(74,222,128,0.15)] text-[#4ade80]'
+          : 'bg-red-500/15 text-red-400',
+      )}
+    >
+      {recebimento ? (
+        <ArrowDownCircle className="h-3.5 w-3.5" />
+      ) : (
+        <ArrowUpCircle className="h-3.5 w-3.5" />
+      )}
+      {recebimento ? 'Recebimento' : 'Pagamento'}
+    </span>
+  )
+}
+
+function AbaLancamentos() {
+  const [tipo, setTipo] = useState('')
+  const [codigoBanco, setCodigoBanco] = useState('')
+  const [de, setDe] = useState(inicioDoMesISO)
+  const [ate, setAte] = useState(hojeISO)
+  const [page, setPage] = useState(0)
+
+  const lancamentosQuery = useLancamentos(tipo, codigoBanco, de, ate, page)
+  const lancamentos = toList(lancamentosQuery.data)
+  const total = totalOf(lancamentosQuery.data)
+  const carregando = lancamentosQuery.isLoading
+
+  useEffect(() => {
+    if (lancamentosQuery.isError) toast.error('Erro ao carregar lançamentos')
+  }, [lancamentosQuery.isError])
+
+  /* totalizador da PÁGINA atual (o backend não retorna somas globais) */
+  const totalRecebimentos = lancamentos
+    .filter((l) => l.tipo === 'RECEBIMENTO')
+    .reduce((soma, l) => soma + (l.valorPago ?? 0), 0)
+  const totalPagamentos = lancamentos
+    .filter((l) => l.tipo === 'PAGAMENTO')
+    .reduce((soma, l) => soma + (l.valorPago ?? 0), 0)
+  const saldo = totalRecebimentos - totalPagamentos
+
+  const listaVazia = !carregando && lancamentos.length === 0
+
+  return (
+    <div className="space-y-4">
+      {/* Filtros */}
+      <div className="flex flex-wrap items-center gap-3">
+        <Select
+          value={tipo || 'TODOS'}
+          onValueChange={(valor) => {
+            setTipo(valor === 'TODOS' ? '' : valor)
+            setPage(0)
+          }}
+        >
+          <SelectTrigger className={cn(inputDark, 'w-44')}>
+            <SelectValue placeholder="Tipo" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="TODOS">Todos</SelectItem>
+            <SelectItem value="RECEBIMENTO">Recebimentos</SelectItem>
+            <SelectItem value="PAGAMENTO">Pagamentos</SelectItem>
+          </SelectContent>
+        </Select>
+
+        <Select
+          value={codigoBanco || 'TODOS'}
+          onValueChange={(valor) => {
+            setCodigoBanco(valor === 'TODOS' ? '' : valor)
+            setPage(0)
+          }}
+        >
+          <SelectTrigger className={cn(inputDark, 'w-52')}>
+            <SelectValue placeholder="Banco" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="TODOS">Todos os bancos</SelectItem>
+            {BANCOS.map((banco) => (
+              <SelectItem key={banco.codigo} value={banco.codigo}>
+                {banco.codigo} — {banco.nome}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+
+        <Input
+          type="date"
+          value={de}
+          onChange={(event) => {
+            setDe(event.target.value)
+            setPage(0)
+          }}
+          title="De"
+          className={cn(inputDark, 'w-44')}
+        />
+        <span className="text-sm text-[color:var(--text-muted)]">até</span>
+        <Input
+          type="date"
+          value={ate}
+          onChange={(event) => {
+            setAte(event.target.value)
+            setPage(0)
+          }}
+          title="Até"
+          className={cn(inputDark, 'w-44')}
+        />
+        <Button
+          variant="ghost"
+          onClick={() => {
+            setTipo('')
+            setCodigoBanco('')
+            setDe(inicioDoMesISO())
+            setAte(hojeISO())
+            setPage(0)
+          }}
+          className="text-[color:var(--text-secondary)] hover:bg-white/[0.06] hover:text-white"
+        >
+          Limpar
+        </Button>
+      </div>
+
+      {/* Totalizador da página (fora do glassmorphism) */}
+      {!listaVazia && (
+        <p className="px-1 text-sm text-[color:var(--text-secondary)]">
+          Recebimentos:{' '}
+          <span className="font-semibold text-[#4ade80]">
+            {brl.format(totalRecebimentos)}
+          </span>{' '}
+          · Pagamentos:{' '}
+          <span className="font-semibold text-red-400">
+            {brl.format(totalPagamentos)}
+          </span>{' '}
+          · Saldo:{' '}
+          <span
+            className={cn(
+              'font-semibold',
+              saldo >= 0 ? 'text-[#4ade80]' : 'text-red-400',
+            )}
+          >
+            {brl.format(saldo)}
+          </span>
+        </p>
+      )}
+
+      {listaVazia ? (
+        <EstadoVazio
+          icone={History}
+          texto="Nenhum lançamento encontrado no período"
+        />
+      ) : (
+        <TabelaGlass
+          colunas={[
+            'Data',
+            'Tipo',
+            'Banco',
+            'Descrição',
+            'Contraparte',
+            'Forma',
+            'Valor pago',
+          ]}
+          rodape={
+            <Paginacao
+              page={page}
+              setPage={setPage}
+              mostrando={lancamentos.length}
+              total={total}
+              carregando={carregando}
+              singular="lançamento"
+              plural="lançamentos"
+            />
+          }
+        >
+          {carregando && <LinhasSkeleton colunas={7} />}
+          {lancamentos.map((lancamento) => {
+            const recebimento = lancamento.tipo === 'RECEBIMENTO'
+            const descricao = lancamento.descricao ?? ''
+            return (
+              <TableRow
+                key={lancamento.id}
+                className="border-white/5 hover:bg-white/[0.03]"
+              >
+                <TableCell className="whitespace-nowrap text-[color:var(--text-secondary)]">
+                  {formatarData(lancamento.data)}
+                </TableCell>
+                <TableCell>
+                  <TipoLancamentoPill tipo={lancamento.tipo} />
+                </TableCell>
+                <TableCell className="whitespace-nowrap text-[color:var(--text-secondary)]">
+                  {labelBanco(lancamento.codigoBanco)}
+                </TableCell>
+                <TableCell
+                  className="max-w-64 font-semibold text-white"
+                  title={descricao || undefined}
+                >
+                  <span className="block truncate">{descricao || '—'}</span>
+                </TableCell>
+                <TableCell className="text-[color:var(--text-secondary)]">
+                  {lancamento.clienteNome ??
+                    lancamento.fornecedorNome ??
+                    '—'}
+                </TableCell>
+                <TableCell>
+                  <span className="inline-block whitespace-nowrap rounded-full bg-white/10 px-2.5 py-0.5 text-xs text-white/70">
+                    {formasPagamento[lancamento.formaPagamento ?? ''] ??
+                      lancamento.formaPagamento ??
+                      '—'}
+                  </span>
+                </TableCell>
+                <TableCell
+                  className={cn(
+                    'whitespace-nowrap font-bold',
+                    recebimento ? 'text-[#4ade80]' : 'text-red-400',
+                  )}
+                >
+                  {recebimento ? '+' : '-'}
+                  {brl.format(lancamento.valorPago ?? 0)}
+                </TableCell>
+              </TableRow>
+            )
+          })}
+        </TabelaGlass>
+      )}
+    </div>
+  )
+}
+
 /* ---------- aba 1: a receber ---------- */
 
 function AbaReceber() {
   const [status, setStatus] = useState('')
   const [cliente, setCliente] = useState<Cliente | null>(null)
+  const [vencimentoDe, setVencimentoDe] = useState('')
+  const [vencimentoAte, setVencimentoAte] = useState('')
   const [page, setPage] = useState(0)
   const [pagando, setPagando] = useState<ContaReceber | null>(null)
   const [detalhes, setDetalhes] = useState<ContaReceber | null>(null)
 
-  const contasQuery = useContasReceber(cliente?.id ?? null, status, page)
+  const contasQuery = useContasReceber(
+    cliente?.id ?? null,
+    status,
+    vencimentoDe,
+    vencimentoAte,
+    page,
+  )
   const pagar = usePagarContaReceber()
 
   const contas = toList(contasQuery.data)
@@ -685,6 +971,45 @@ function AbaReceber() {
         >
           Limpar filtros
         </Button>
+      </div>
+
+      {/* Filtros de vencimento */}
+      <div className="flex flex-wrap items-center gap-3">
+        <Input
+          type="date"
+          value={vencimentoDe}
+          onChange={(event) => {
+            setVencimentoDe(event.target.value)
+            setPage(0)
+          }}
+          title="Vencimento de"
+          className={cn(inputDark, 'w-44')}
+        />
+        <span className="text-sm text-[color:var(--text-muted)]">até</span>
+        <Input
+          type="date"
+          value={vencimentoAte}
+          onChange={(event) => {
+            setVencimentoAte(event.target.value)
+            setPage(0)
+          }}
+          title="Vencimento até"
+          className={cn(inputDark, 'w-44')}
+        />
+        {(vencimentoDe || vencimentoAte) && (
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => {
+              setVencimentoDe('')
+              setVencimentoAte('')
+              setPage(0)
+            }}
+            className="text-[color:var(--text-secondary)] hover:bg-white/[0.06] hover:text-white"
+          >
+            Limpar datas
+          </Button>
+        )}
       </div>
 
       {listaVazia ? (
@@ -993,13 +1318,25 @@ function NovaContaPagarDialog({ onClose }: { onClose: () => void }) {
 
 function AbaPagar() {
   const [status, setStatus] = useState('')
+  const [fornecedor, setFornecedor] = useState<Fornecedor | null>(null)
+  const [vencimentoDe, setVencimentoDe] = useState('')
+  const [vencimentoAte, setVencimentoAte] = useState('')
   const [page, setPage] = useState(0)
   const [novaConta, setNovaConta] = useState(false)
   const [pagando, setPagando] = useState<ContaPagar | null>(null)
   const [detalhes, setDetalhes] = useState<ContaPagar | null>(null)
 
-  const contasQuery = useContasPagar(status, page)
+  const contasQuery = useContasPagar(
+    status,
+    fornecedor?.id ?? null,
+    vencimentoDe,
+    vencimentoAte,
+    page,
+  )
   const pagar = usePagarContaPagar()
+
+  const temFiltro =
+    fornecedor != null || vencimentoDe !== '' || vencimentoAte !== ''
 
   const contas = toList(contasQuery.data)
   const total = totalOf(contasQuery.data)
@@ -1045,12 +1382,60 @@ function AbaPagar() {
             ))}
           </SelectContent>
         </Select>
+        <FornecedorCombobox
+          value={fornecedor}
+          onChange={(novo) => {
+            setFornecedor(novo)
+            setPage(0)
+          }}
+          className="w-full max-w-xs"
+        />
         <Button
           onClick={() => setNovaConta(true)}
           className={cn('ml-auto', botaoVerdeClass)}
         >
           Nova conta a pagar
         </Button>
+      </div>
+
+      {/* Filtros de vencimento */}
+      <div className="flex flex-wrap items-center gap-3">
+        <Input
+          type="date"
+          value={vencimentoDe}
+          onChange={(event) => {
+            setVencimentoDe(event.target.value)
+            setPage(0)
+          }}
+          title="Vencimento de"
+          className={cn(inputDark, 'w-44')}
+        />
+        <span className="text-sm text-[color:var(--text-muted)]">até</span>
+        <Input
+          type="date"
+          value={vencimentoAte}
+          onChange={(event) => {
+            setVencimentoAte(event.target.value)
+            setPage(0)
+          }}
+          title="Vencimento até"
+          className={cn(inputDark, 'w-44')}
+        />
+        {temFiltro && (
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => {
+              setFornecedor(null)
+              setVencimentoDe('')
+              setVencimentoAte('')
+              setPage(0)
+            }}
+            className="text-[color:var(--text-secondary)] hover:bg-white/[0.06] hover:text-white"
+          >
+            Limpar filtros
+          </Button>
+        )}
       </div>
 
       {listaVazia ? (
@@ -1536,15 +1921,18 @@ function AbaFluxo() {
 /* ---------- página ---------- */
 
 export default function FinanceiroPage() {
-  const [aba, setAba] = useState<'receber' | 'pagar' | 'fluxo'>('receber')
+  const [aba, setAba] = useState<
+    'lancamentos' | 'receber' | 'pagar' | 'fluxo'
+  >('lancamentos')
 
   return (
     <Shell title="Financeiro" subtitle="Contas a pagar e receber">
       <div className="space-y-4">
         {/* Abas pill */}
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           {(
             [
+              ['lancamentos', 'Lançamentos'],
               ['receber', 'A Receber'],
               ['pagar', 'A Pagar'],
               ['fluxo', 'Fluxo de Caixa'],
@@ -1566,6 +1954,7 @@ export default function FinanceiroPage() {
           ))}
         </div>
 
+        {aba === 'lancamentos' && <AbaLancamentos />}
         {aba === 'receber' && <AbaReceber />}
         {aba === 'pagar' && <AbaPagar />}
         {aba === 'fluxo' && <AbaFluxo />}

@@ -44,7 +44,24 @@ export interface PagamentoInput {
   dataPagamento: string // yyyy-MM-dd
   valorPago: number
   formaPagamento: string
+  codigoBanco?: string
+  nomeBanco?: string
   observacoes?: string
+}
+
+export interface Lancamento {
+  id: string // UUID
+  tipo: 'RECEBIMENTO' | 'PAGAMENTO'
+  data: string
+  descricao: string
+  valor: number
+  valorPago: number
+  codigoBanco?: string | null
+  nomeBanco?: string | null
+  formaPagamento: string
+  clienteNome?: string | null
+  fornecedorNome?: string | null
+  origem: 'CONTA_RECEBER' | 'CONTA_PAGAR'
 }
 
 export interface ContaPagarInput {
@@ -74,13 +91,48 @@ export interface FluxoCaixa {
 
 export const FINANCEIRO_PAGE_SIZE = 20
 
-export function useContasReceber(
-  clienteId: string | null,
-  status: string,
+export function useLancamentos(
+  tipo: string,
+  codigoBanco: string,
+  de: string,
+  ate: string,
   page: number,
 ) {
   return useQuery({
-    queryKey: ['financeiro', 'contas-receber', { clienteId, status, page }],
+    queryKey: ['financeiro', 'lancamentos', { tipo, codigoBanco, de, ate, page }],
+    queryFn: async () => {
+      const { data } = await api.get<SpringPage<Lancamento> | Lancamento[]>(
+        '/financeiro/lancamentos',
+        {
+          params: {
+            tipo: tipo || undefined,
+            codigoBanco: codigoBanco || undefined,
+            de: de || undefined,
+            ate: ate || undefined,
+            page,
+            size: FINANCEIRO_PAGE_SIZE,
+          },
+        },
+      )
+      return data
+    },
+    placeholderData: keepPreviousData,
+  })
+}
+
+export function useContasReceber(
+  clienteId: string | null,
+  status: string,
+  vencimentoDe: string,
+  vencimentoAte: string,
+  page: number,
+) {
+  return useQuery({
+    queryKey: [
+      'financeiro',
+      'contas-receber',
+      { clienteId, status, vencimentoDe, vencimentoAte, page },
+    ],
     queryFn: async () => {
       const { data } = await api.get<SpringPage<ContaReceber> | ContaReceber[]>(
         '/financeiro/contas-receber',
@@ -88,6 +140,8 @@ export function useContasReceber(
           params: {
             clienteId: clienteId ?? undefined,
             status: status || undefined,
+            vencimentoDe: vencimentoDe || undefined,
+            vencimentoAte: vencimentoAte || undefined,
             page,
             size: FINANCEIRO_PAGE_SIZE,
           },
@@ -133,15 +187,28 @@ export function usePagarContaReceber() {
   })
 }
 
-export function useContasPagar(status: string, page: number) {
+export function useContasPagar(
+  status: string,
+  fornecedorId: string | null,
+  vencimentoDe: string,
+  vencimentoAte: string,
+  page: number,
+) {
   return useQuery({
-    queryKey: ['financeiro', 'contas-pagar', { status, page }],
+    queryKey: [
+      'financeiro',
+      'contas-pagar',
+      { status, fornecedorId, vencimentoDe, vencimentoAte, page },
+    ],
     queryFn: async () => {
       const { data } = await api.get<SpringPage<ContaPagar> | ContaPagar[]>(
         '/financeiro/contas-pagar',
         {
           params: {
             status: status || undefined,
+            fornecedorId: fornecedorId ?? undefined,
+            vencimentoDe: vencimentoDe || undefined,
+            vencimentoAte: vencimentoAte || undefined,
             page,
             size: FINANCEIRO_PAGE_SIZE,
           },
