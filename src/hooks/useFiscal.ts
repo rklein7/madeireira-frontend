@@ -66,6 +66,8 @@ export interface NotaFiscal {
   } | null
   pedidoId?: string | null
   pedidoNumero?: string | null
+  pedidoCompraId?: string | null
+  pedidoCompraNumero?: string | null
   dataEmissao?: string | null
   dataEntradaSaida?: string | null
   valorProdutos?: number | null
@@ -99,6 +101,7 @@ export interface ItemNFInput {
 
 export interface NFEntradaInput {
   fornecedorId: string // UUID
+  pedidoCompraId?: string // UUID
   numero: string
   serie: string
   cfop: string

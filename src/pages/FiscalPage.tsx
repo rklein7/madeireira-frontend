@@ -87,6 +87,7 @@ import type { Cliente } from '@/hooks/useClientes'
 import type { Fornecedor } from '@/hooks/useFornecedores'
 import type { Produto } from '@/hooks/useProdutos'
 import { fetchPedido, type Pedido } from '@/hooks/useVendas'
+import { usePedidosCompra, type PedidoCompra } from '@/hooks/useCompras'
 import {
   FISCAL_PAGE_SIZE,
   fetchNotaFiscal,
@@ -583,6 +584,7 @@ function SecaoLabel({ children }: { children: React.ReactNode }) {
 
 const entradaSchema = z.object({
   fornecedorId: z.string().min(1, 'Selecione o fornecedor'),
+  pedidoCompraId: z.string(),
   numero: z.string().min(1, 'Informe o número').max(20, 'Máximo de 20 caracteres'),
   serie: z.string().max(5, 'Máximo de 5 caracteres'),
   cfop: z.string().min(1, 'Informe o CFOP'),
@@ -605,14 +607,31 @@ const CFOPS_ENTRADA: [string, string][] = [
   ['1.653', 'Compra serviço'],
 ]
 
+function useBuscaPedidosCompraDisponiveis(busca: string) {
+  /* semNfVinculada=true já retorna só pedidos CONFIRMADOS sem NF ativa */
+  const query = usePedidosCompra(undefined, undefined, true, 0)
+  const todos = toList(query.data)
+  const termo = busca.trim().toLowerCase()
+  const itens = termo
+    ? todos.filter(
+        (pedido) =>
+          (pedido.numero ?? '').toLowerCase().includes(termo) ||
+          (pedido.fornecedorNome ?? '').toLowerCase().includes(termo),
+      )
+    : todos
+  return { itens, carregando: query.isLoading }
+}
+
 function EntradaDialog({ onClose }: { onClose: () => void }) {
   const [fornecedor, setFornecedor] = useState<Fornecedor | null>(null)
+  const [pedidoCompra, setPedidoCompra] = useState<PedidoCompra | null>(null)
   const escriturar = useEscriturarEntrada()
 
   const form = useForm<EntradaFormValues>({
     resolver: zodResolver(entradaSchema),
     defaultValues: {
       fornecedorId: '',
+      pedidoCompraId: '',
       numero: '',
       serie: '1',
       cfop: '',
@@ -627,7 +646,7 @@ function EntradaDialog({ onClose }: { onClose: () => void }) {
     },
   })
 
-  const { fields, append, remove } = useFieldArray({
+  const { fields, append, remove, replace } = useFieldArray({
     control: form.control,
     name: 'itens',
   })
@@ -640,9 +659,48 @@ function EntradaDialog({ onClose }: { onClose: () => void }) {
   )
   const icmsTotal = somaTributo(itensWatch, 'Icms')
 
+  function selecionarPedidoCompra(novo: PedidoCompra | null) {
+    setPedidoCompra(novo)
+    form.setValue('pedidoCompraId', novo?.id ?? '', {
+      shouldValidate: form.formState.isSubmitted,
+    })
+    if (!novo) return
+
+    /* fornecedor da NF trava no fornecedor do pedido selecionado */
+    const fornecedorDoPedido: Fornecedor = {
+      id: novo.fornecedorId,
+      razaoSocial: novo.fornecedorNome,
+      cpfCnpj: novo.fornecedorCpfCnpj ?? '',
+      tipoPessoa: 'PJ',
+    }
+    setFornecedor(fornecedorDoPedido)
+    form.setValue('fornecedorId', novo.fornecedorId, {
+      shouldValidate: form.formState.isSubmitted,
+    })
+
+    /* itens da NF pré-preenchidos com os itens do pedido de compra —
+       tributos ficam zerados para o operador preencher */
+    replace(
+      (novo.itens ?? []).map((item, index) => ({
+        ...itemNFVazio(index + 1),
+        produtoId: item.produtoId ?? '',
+        produto: {
+          id: item.produtoId ?? '',
+          codigo: item.produtoCodigo ?? '—',
+          descricao: item.produtoDescricao ?? '—',
+          unidadeMedida: item.unidadeMedida,
+        } as Produto,
+        quantidade: item.quantidade != null ? String(item.quantidade) : '',
+        valorUnitario:
+          item.precoUnitario != null ? String(item.precoUnitario) : '',
+      })),
+    )
+  }
+
   async function onSubmit(values: EntradaFormValues) {
     const payload: NFEntradaInput = {
       fornecedorId: values.fornecedorId,
+      pedidoCompraId: values.pedidoCompraId || undefined,
       numero: values.numero.trim(),
       serie: values.serie.trim() || '1',
       cfop: values.cfop.trim(),
@@ -660,7 +718,9 @@ function EntradaDialog({ onClose }: { onClose: () => void }) {
     try {
       await escriturar.mutateAsync(payload)
       toast.success(
-        'NF escriturada — estoque e contas a pagar atualizados automaticamente',
+        pedidoCompra
+          ? 'NF escriturada — estoque, contas a pagar e pedido de compra atualizados'
+          : 'NF escriturada — estoque e contas a pagar atualizados automaticamente',
       )
       onClose()
     } catch (error) {
@@ -693,16 +753,78 @@ function EntradaDialog({ onClose }: { onClose: () => void }) {
                       Fornecedor
                     </FormLabel>
                     <FormControl>
-                      <FornecedorCombobox
-                        value={fornecedor}
-                        onChange={(novo) => {
-                          setFornecedor(novo)
-                          form.setValue('fornecedorId', novo?.id ?? '', {
-                            shouldValidate: form.formState.isSubmitted,
-                          })
-                        }}
-                      />
+                      {pedidoCompra ? (
+                        <div
+                          className={cn(
+                            inputDark,
+                            'flex items-center rounded-md px-3 text-sm text-white/70',
+                          )}
+                        >
+                          {fornecedor?.razaoSocial ?? '—'}
+                        </div>
+                      ) : (
+                        <FornecedorCombobox
+                          value={fornecedor}
+                          onChange={(novo) => {
+                            setFornecedor(novo)
+                            form.setValue('fornecedorId', novo?.id ?? '', {
+                              shouldValidate: form.formState.isSubmitted,
+                            })
+                          }}
+                        />
+                      )}
                     </FormControl>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+              <FormField
+                control={form.control}
+                name="pedidoCompraId"
+                render={() => (
+                  <FormItem className="sm:col-span-2">
+                    <FormLabel className="text-[color:var(--text-secondary)]">
+                      Pedido de compra
+                    </FormLabel>
+                    <FormControl>
+                      <div className="relative">
+                        <ComboboxBusca<PedidoCompra>
+                          value={pedidoCompra}
+                          onChange={selecionarPedidoCompra}
+                          useBusca={useBuscaPedidosCompraDisponiveis}
+                          getLabel={(item) =>
+                            `${item.numero} — ${item.fornecedorNome}`
+                          }
+                          renderOption={(item) => (
+                            <>
+                              <span className="shrink-0 font-mono text-xs text-blue-400">
+                                {item.numero}
+                              </span>
+                              <span className="truncate text-white/80">
+                                {item.fornecedorNome}
+                              </span>
+                              <span className="ml-auto shrink-0 text-xs text-[color:var(--text-muted)]">
+                                {brl.format(item.valorTotal ?? 0)}
+                              </span>
+                            </>
+                          )}
+                          placeholder="Vincular pedido de compra (opcional)"
+                        />
+                        {pedidoCompra && (
+                          <button
+                            type="button"
+                            title="Remover vínculo"
+                            onClick={() => selecionarPedidoCompra(null)}
+                            className="absolute right-2 top-1/2 flex h-6 w-6 -translate-y-1/2 items-center justify-center rounded-md text-[color:var(--text-muted)] transition-colors hover:bg-white/[0.08] hover:text-white"
+                          >
+                            <X className="h-3.5 w-3.5" />
+                          </button>
+                        )}
+                      </div>
+                    </FormControl>
+                    <p className="text-[11px] text-[color:var(--text-muted)]">
+                      Apenas pedidos confirmados sem NF vinculada
+                    </p>
                     <FormMessage />
                   </FormItem>
                 )}
@@ -1555,14 +1677,22 @@ function NotaDrawer({
                   Nota fiscal
                 </p>
                 <div className="mb-2 flex items-center gap-2 text-sm text-[color:var(--text-secondary)]">
-                  Pedido vinculado:{' '}
-                  {nota.pedidoNumero ? (
-                    <Badge className="rounded-md border-transparent bg-blue-500/15 font-mono text-xs text-blue-400 hover:bg-blue-500/15">
-                      {nota.pedidoNumero}
-                    </Badge>
-                  ) : (
-                    <span className="text-white">—</span>
-                  )}
+                  {nota.tipo === 'ENTRADA'
+                    ? 'Pedido de compra vinculado:'
+                    : 'Pedido vinculado:'}{' '}
+                  {(() => {
+                    const numeroVinculado =
+                      nota.tipo === 'ENTRADA'
+                        ? nota.pedidoCompraNumero
+                        : nota.pedidoNumero
+                    return numeroVinculado ? (
+                      <Badge className="rounded-md border-transparent bg-blue-500/15 font-mono text-xs text-blue-400 hover:bg-blue-500/15">
+                        {numeroVinculado}
+                      </Badge>
+                    ) : (
+                      <span className="text-white">—</span>
+                    )
+                  })()}
                 </div>
                 <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-sm">
                   <p className="text-[color:var(--text-secondary)]">
@@ -1808,7 +1938,7 @@ function AbaNotasFiscais({ layout }: { layout: LayoutNotas }) {
 
   const colunas =
     layout === 'entrada'
-      ? ['Status', 'Número / Série', 'CFOP', 'Fornecedor', 'Data emissão', 'Valor total', 'Ações']
+      ? ['Status', 'Número / Série', 'Pedido', 'CFOP', 'Fornecedor', 'Data emissão', 'Valor total', 'Ações']
       : layout === 'saida'
         ? ['Status', 'Número / Série', 'Pedido', 'CFOP', 'Cliente', 'Data emissão', 'Valor total', 'Ações']
         : ['Tipo', 'Número / Série', 'CFOP', 'Pedido', 'Emitente/Destinatário', 'Emissão', 'Valor total', 'Status', 'Ações']
@@ -1988,6 +2118,11 @@ function AbaNotasFiscais({ layout }: { layout: LayoutNotas }) {
                     {layout === 'saida' && (
                       <TableCell>
                         <PedidoBadge pedidoNumero={nota.pedidoNumero} />
+                      </TableCell>
+                    )}
+                    {layout === 'entrada' && (
+                      <TableCell>
+                        <PedidoBadge pedidoNumero={nota.pedidoCompraNumero} />
                       </TableCell>
                     )}
                     <TableCell>

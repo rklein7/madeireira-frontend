@@ -7,6 +7,7 @@ import ClientesPage from '@/pages/ClientesPage'
 import ProdutosPage from '@/pages/ProdutosPage'
 import FornecedoresPage from '@/pages/FornecedoresPage'
 import EstoquePage from '@/pages/EstoquePage'
+import ComprasPage from '@/pages/ComprasPage'
 import VendasPage from '@/pages/VendasPage'
 import FinanceiroPage from '@/pages/FinanceiroPage'
 import FiscalPage from '@/pages/FiscalPage'
@@ -64,6 +65,14 @@ function App() {
         element={
           <PrivateRoute>
             <EstoquePage />
+          </PrivateRoute>
+        }
+      />
+      <Route
+        path="/compras"
+        element={
+          <PrivateRoute>
+            <ComprasPage />
           </PrivateRoute>
         }
       />

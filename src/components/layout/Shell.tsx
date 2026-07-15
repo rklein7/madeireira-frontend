@@ -11,6 +11,7 @@ import {
   Receipt,
   Search,
   Settings,
+  ShoppingCart,
   Trees,
   Truck,
   User,
@@ -35,6 +36,7 @@ interface ShellProps {
 
 const modulosNav: { to: string; icon: LucideIcon; label: string }[] = [
   { to: '/estoque', icon: Package, label: 'Estoque' },
+  { to: '/compras', icon: ShoppingCart, label: 'Compras' },
   { to: '/vendas', icon: Receipt, label: 'Vendas' },
   { to: '/financeiro', icon: Coins, label: 'Financeiro' },
   { to: '/fiscal', icon: FileText, label: 'Fiscal' },
